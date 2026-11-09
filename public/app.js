@@ -533,13 +533,13 @@
           </div>
           <div class="group">
             <div class="row"><label for="ev-date">Date</label><input id="ev-date" name="date" type="date" value="${esc(e.date)}" required></div>
-            <div class="row"><label for="ev-time">Time</label><input id="ev-time" name="time" type="time" value="${esc(e.time)}"></div>
+            <div class="row"><label>Time</label>${timePicker('time', e.time, 'Event time')}</div>
             <div class="row"><label for="ev-cost">Cost</label><span class="prefix">$</span><input id="ev-cost" name="cost" inputmode="decimal" placeholder="0.00 (leave blank if none)" value="${e.cost ?? ''}"></div>
           </div>
           <div class="group">
             <div class="row stack"><textarea name="description" placeholder="Description — what to bring, who's hosting, anything people should know" maxlength="4000" aria-label="Description">${esc(e.description)}</textarea></div>
           </div>
-          <p class="group-foot">Leave the time blank for an all-day event. Enter 0 for a free event. ${s.id ? '' : 'Everyone in the group will get an email about it.'}</p>
+          <p class="group-foot">Set the hour to -- for an all-day event. Enter 0 for a free event. ${s.id ? '' : 'Everyone in the group will get an email about it.'}</p>
           <div id="sheet-msg"></div>
         </div></form>`;
     }
@@ -564,27 +564,27 @@
         </div>`;
     }
     if (s.kind === 'poll-form') {
-      const opts = s.options || (s.options = [{ date: '', time: '' }, { date: '', time: '' }]);
-      return `<form autocomplete="off">${head('New Poll', 'Cancel', 'Create')}
+      const p = s.id ? S.polls.find((x) => x.id === s.id) : null;
+      const d = p || { title: '', location: '', cost: null, description: '', options: [{ date: '', time: '' }, { date: '', time: '' }] };
+      const opts = d.options.map((o) => ({ id: o.id || '', date: o.date, time: o.time }));
+      return `<form autocomplete="off" novalidate>${head(p ? 'Edit Poll' : 'New Poll', 'Cancel', p ? 'Save' : 'Create')}
         <div class="sheet-body">
           <div class="group">
-            <div class="row"><input name="title" placeholder="What are we planning?" maxlength="120" value="${esc(s.title || '')}" aria-label="Title" required></div>
-            <div class="row"><input name="location" placeholder="Location" maxlength="200" value="${esc(s.location || '')}" aria-label="Location"></div>
-            <div class="row"><label for="p-cost">Cost</label><span class="prefix">$</span><input id="p-cost" name="cost" inputmode="decimal" placeholder="0.00 (optional)" value="${esc(s.cost ?? '')}"></div>
+            <div class="row"><input name="title" placeholder="What are we planning?" maxlength="120" value="${esc(d.title)}" aria-label="Title" required></div>
+            <div class="row"><input name="location" placeholder="Location" maxlength="200" value="${esc(d.location)}" aria-label="Location"></div>
+            <div class="row"><label for="p-cost">Cost</label><span class="prefix">$</span><input id="p-cost" name="cost" inputmode="decimal" placeholder="0.00 (optional)" value="${esc(d.cost ?? '')}"></div>
           </div>
           <div class="group">
-            <div class="row stack"><textarea name="description" placeholder="Description (optional)" maxlength="4000" aria-label="Description">${esc(s.description || '')}</textarea></div>
+            <div class="row stack"><textarea name="description" placeholder="Description (optional)" maxlength="4000" aria-label="Description">${esc(d.description)}</textarea></div>
           </div>
           <div class="group-label" style="margin-top:22px">Date options</div>
           <div class="group" id="opt-list">
-            ${opts.map((o, i) => `<div class="row" data-i="${i}">
-              <button type="button" class="opt-remove" data-action="remove-opt" data-i="${i}" aria-label="Remove option ${i + 1}" ${opts.length <= 2 ? 'disabled style="opacity:.35"' : ''}>${I.minus.replace('<svg', '<svg width="22" height="22"')}</button>
-              <input type="date" name="od${i}" value="${esc(o.date)}" aria-label="Option ${i + 1} date" style="text-align:left">
-              <input type="time" name="ot${i}" value="${esc(o.time)}" aria-label="Option ${i + 1} time" style="flex:0 0 auto;width:auto">
-            </div>`).join('')}
+            ${opts.map((o) => optRow(o, opts.length > 2)).join('')}
             <div class="row button-row" data-action="add-opt" role="button" tabindex="0">${I.plus.replace('<svg', '<svg width="18" height="18"')} Add another date</div>
           </div>
-          <p class="group-foot">Add at least two dates. Members mark each one Yes, Maybe, or No, and you'll see who answered. When you pick the final date, it goes on the calendar and everyone gets an email.</p>
+          <p class="group-foot">${p
+            ? 'Adding dates keeps everyone\u2019s responses. Changing the date or time of an option clears the responses for that option only, since people answered for a different time. Removing an option removes its responses.'
+            : 'Add at least two dates. Members mark each one Yes, Maybe, or No, and you\u2019ll see who answered. When you pick the final date, it goes on the calendar and everyone gets an email.'}</p>
           <div id="sheet-msg"></div>
         </div></form>`;
     }
@@ -638,7 +638,7 @@
           </div>
           ${waiting.length ? `<div class="group-label" style="margin-top:22px">Waiting on · ${waiting.length}</div>
           <div class="group people">${waiting.map((m) => `<div class="person">${avatar(m.id, m.name)}<div class="nm">${esc(m.name)}${m.id === S.me.id ? ' <span class="muted">(you)</span>' : ''}</div><span class="pill">No reply</span></div>`).join('')}</div>` : ''}
-          ${owner ? `<div class="actions"><button class="btn danger block" data-action="delete-poll" data-id="${esc(p.id)}">Delete Poll</button></div>` : ''}
+          ${owner ? `<div class="actions">${open ? `<button class="btn tinted block" data-action="edit-poll" data-id="${esc(p.id)}">Edit Poll</button>` : ''}<button class="btn danger block" data-action="delete-poll" data-id="${esc(p.id)}">Delete Poll</button></div>` : ''}
         </div>`;
     }
     if (s.kind === 'group-new' || s.kind === 'group-join' || s.kind === 'group-edit') {
@@ -723,6 +723,7 @@
       if (s.kind === 'event-form') {
         if (!v.title.trim()) { btn.disabled = false; return err('Please add a title.'); }
         if (!v.date) { btn.disabled = false; return err('Please choose a date.'); }
+        v.time = readTime(form, 'time');
         const body = { title: v.title, location: v.location, date: v.date, time: v.time, cost: v.cost, description: v.description };
         const r = s.id ? await api('PUT', gp(`/events/${s.id}`), body) : await api('POST', gp('/events'), body);
         await loadAll();
@@ -731,15 +732,17 @@
         closeSheet(); render();
         toast(s.id ? 'Event updated' : 'Event added · Group notified');
       } else if (s.kind === 'poll-form') {
-        syncPollForm();
         if (!v.title.trim()) { btn.disabled = false; return err('Please add a title.'); }
-        const options = s.options.filter((o) => o.date);
+        const options = readOptions(form).filter((o) => o.date);
         if (options.length < 2) { btn.disabled = false; return err('Add at least two dates for people to vote on.'); }
-        const r = await api('POST', gp('/polls'), { title: v.title, location: v.location, cost: v.cost, description: v.description, options });
+        const keys = options.map((o) => o.date + o.time);
+        if (new Set(keys).size !== keys.length) { btn.disabled = false; return err('Two options have the same date and time. Change or remove one.'); }
+        const body = { title: v.title, location: v.location, cost: v.cost, description: v.description, options };
+        const r = s.id ? await api('PUT', gp(`/polls/${s.id}`), body) : await api('POST', gp('/polls'), body);
         await loadAll();
         S.view = 'polls'; render();
         openSheet('poll', { id: r.poll.id }); history.replaceState(null, '', '#polls/' + r.poll.id);
-        toast('Poll created · Group notified');
+        toast(s.id ? 'Poll updated' : 'Poll created · Group notified');
       } else if (s.kind === 'profile') {
         const r = await api('PATCH', '/me', { name: v.name });
         S.me = r.user; await loadAll(); closeSheet(); render(); toast('Profile saved');
@@ -747,19 +750,45 @@
     } catch (ex) { err(ex.message); btn.disabled = false; }
   }
 
-  function syncPollForm() {
-    const s = S.sheet, form = $sheetRoot.querySelector('form');
-    if (!s || s.kind !== 'poll-form' || !form) return;
-    const fd = new FormData(form);
-    s.title = fd.get('title'); s.location = fd.get('location'); s.cost = fd.get('cost'); s.description = fd.get('description');
-    s.options = s.options.map((_, i) => ({ date: fd.get('od' + i) || '', time: fd.get('ot' + i) || '' }));
+  // ---------- Time picker & poll option rows ----------
+  let rowSeq = 0;
+  function timePicker(prefix, value, label) {
+    let h = '', m = '00', per = 'PM';
+    if (value) { const [H, M] = value.split(':').map(Number); h = String(((H + 11) % 12) + 1); m = pad(M); per = H < 12 ? 'AM' : 'PM'; }
+    const mins = Array.from({ length: 12 }, (_, i) => pad(i * 5));
+    if (!mins.includes(m)) { mins.push(m); mins.sort(); }
+    return `<span class="tp${h ? '' : ' tp-empty'}" role="group" aria-label="${esc(label)}">
+      <select name="${prefix}_h" aria-label="Hour" data-tp><option value="">--</option>${Array.from({ length: 12 }, (_, i) => `<option${String(i + 1) === h ? ' selected' : ''}>${i + 1}</option>`).join('')}</select>
+      <span class="tp-colon">:</span>
+      <select name="${prefix}_m" aria-label="Minutes" data-tp>${mins.map((x) => `<option${x === m ? ' selected' : ''}>${x}</option>`).join('')}</select>
+      <select name="${prefix}_p" aria-label="AM or PM" data-tp><option${per === 'AM' ? ' selected' : ''}>AM</option><option${per === 'PM' ? ' selected' : ''}>PM</option></select>
+    </span>`;
   }
-  function rerenderForm() {
-    const sheet = $sheetRoot.querySelector('.sheet');
-    const top = sheet.querySelector('.sheet-body').scrollTop;
-    sheet.innerHTML = sheetHtml();
-    sheet.querySelector('.sheet-body').scrollTop = top;
-    sheet.querySelector('form').addEventListener('submit', (e) => { e.preventDefault(); onSheetSave(); });
+  function readTime(root, prefix) {
+    const q = (n) => root.querySelector(`[name="${prefix}_${n}"]`);
+    if (!q('h') || !q('h').value) return '';
+    let H = Number(q('h').value) % 12;
+    if (q('p').value === 'PM') H += 12;
+    return `${pad(H)}:${q('m').value || '00'}`;
+  }
+  function optRow(o, removable) {
+    const k = 'o' + (++rowSeq);
+    return `<div class="row opt-row" data-key="${k}" data-id="${esc(o.id || '')}">
+      <button type="button" class="opt-remove" data-action="remove-opt" aria-label="Remove this date" ${removable ? '' : 'disabled'}>${I.minus.replace('<svg', '<svg width="22" height="22"')}</button>
+      <input type="date" name="${k}_d" value="${esc(o.date)}" aria-label="Date" class="opt-date">
+      ${timePicker(k + '_t', o.time, 'Time')}
+    </div>`;
+  }
+  function readOptions(form) {
+    return [...form.querySelectorAll('.opt-row')].map((r) => ({
+      id: r.dataset.id || undefined,
+      date: r.querySelector('.opt-date').value,
+      time: readTime(r, r.dataset.key + '_t'),
+    }));
+  }
+  function refreshRemoveButtons(form) {
+    const rows = form.querySelectorAll('.opt-row');
+    rows.forEach((r) => { r.querySelector('.opt-remove').disabled = rows.length <= 2; });
   }
 
   function downloadIcs(e) {
@@ -811,16 +840,30 @@
     'new-poll': () => openSheet('poll-form'),
     'open-poll': (el) => { openSheet('poll', { id: el.dataset.id }); history.replaceState(null, '', '#polls/' + el.dataset.id); },
     'add-opt': () => {
-      syncPollForm();
-      const last = S.sheet.options[S.sheet.options.length - 1];
-      let date = '';
-      if (last?.date) date = ymd(new Date(parseYmd(last.date).getTime() + 7 * 864e5 + 3600e3)); // suggest same day next week
-      S.sheet.options.push({ date, time: last?.time || '' });
-      rerenderForm();
-      const rows = $sheetRoot.querySelectorAll('#opt-list input[type=date]');
-      rows[rows.length - 1]?.focus();
+      const form = $sheetRoot.querySelector('form'), rows = form.querySelectorAll('.opt-row');
+      const last = rows[rows.length - 1];
+      const lastDate = last?.querySelector('.opt-date').value || '';
+      const date = lastDate ? ymd(new Date(parseYmd(lastDate).getTime() + 7 * 864e5 + 3600e3)) : ''; // same weekday next week
+      const time = last ? readTime(last, last.dataset.key + '_t') : '';
+      const tmp = document.createElement('div');
+      tmp.innerHTML = optRow({ date, time }, true);
+      const row = tmp.firstElementChild;
+      if (last && !time) { // keep whatever AM/PM and minutes were picked even if the hour isn't set yet
+        const k = last.dataset.key, nk = row.dataset.key;
+        row.querySelector(`[name="${nk}_t_m"]`).value = last.querySelector(`[name="${k}_t_m"]`).value;
+        row.querySelector(`[name="${nk}_t_p"]`).value = last.querySelector(`[name="${k}_t_p"]`).value;
+      }
+      form.querySelector('[data-action="add-opt"]').before(row);
+      refreshRemoveButtons(form);
+      row.querySelector('.opt-date').focus();
     },
-    'remove-opt': (el) => { syncPollForm(); if (S.sheet.options.length > 2) { S.sheet.options.splice(Number(el.dataset.i), 1); rerenderForm(); } },
+    'remove-opt': (el) => {
+      const form = el.closest('form');
+      if (form.querySelectorAll('.opt-row').length <= 2) return;
+      el.closest('.opt-row').remove();
+      refreshRemoveButtons(form);
+    },
+    'edit-poll': (el) => openSheet('poll-form', { id: el.dataset.id }),
     vote: async (el) => {
       const p = S.polls.find((x) => x.id === el.dataset.poll);
       const o = p.options.find((x) => x.id === el.dataset.opt);
@@ -917,6 +960,7 @@
   });
   document.addEventListener('change', (ev) => {
     const el = ev.target;
+    if (el.matches?.('select[data-tp]')) { const tp = el.closest('.tp'); tp.classList.toggle('tp-empty', !tp.querySelector('select').value); }
     if (el.dataset?.action === 'toggle-notify') actions['toggle-notify'](el);
   });
   document.addEventListener('keydown', (ev) => {

@@ -575,6 +575,49 @@ route('POST', '/groups/:gid/polls', async ({ req, body, params, ctx }) => {
   return { poll: await pollOut(m.group.id, poll, { [m.user.id]: m.user.name }) };
 });
 
+route('PUT', '/groups/:gid/polls/:id', async ({ req, body, params }) => {
+  const m = await requireMember(req, params.gid);
+  const pk = `g/${m.group.id}/polls/${validId(params.id)}`;
+  const poll = await get(pk);
+  if (!poll) throw new HttpError(404, 'Poll not found.');
+  if (!canModify(m, poll.createdBy)) throw new HttpError(403, 'Only the person who created this poll or a group organizer can edit it.');
+  if (poll.status !== 'open') throw new HttpError(400, 'A date has already been picked for this poll. Edit the calendar event instead.');
+  const title = str(body.title, 120);
+  if (!title) throw new HttpError(400, 'Please add a title.');
+  const existing = new Map(poll.options.map((o) => [o.id, o]));
+  const seen = new Set(), options = [], cleared = new Set();
+  for (const o of (Array.isArray(body.options) ? body.options : []).slice(0, 30)) {
+    const date = str(o?.date, 10), time = str(o?.time, 5);
+    if (!isDate(date) || !isTime(time) || seen.has(date + time)) continue;
+    seen.add(date + time);
+    const prev = typeof o.id === 'string' ? existing.get(o.id) : null;
+    if (prev) {
+      if (prev.date !== date || prev.time !== time) cleared.add(prev.id); // answered for a different time
+      options.push({ id: prev.id, date, time });
+    } else {
+      options.push({ id: newId(), date, time });
+    }
+  }
+  if (options.length < 2) throw new HttpError(400, 'Add at least two date options for people to vote on.');
+  options.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
+  const keep = new Set(options.map((o) => o.id));
+  // Drop answers only for removed options and options whose date/time changed
+  for (const k of await keys(`g/${m.group.id}/votes/${poll.id}/`)) {
+    const v = await get(k);
+    if (!v) continue;
+    let changed = false;
+    for (const optId of Object.keys(v.answers)) {
+      if (!keep.has(optId) || cleared.has(optId)) { delete v.answers[optId]; changed = true; }
+    }
+    if (!changed) continue;
+    if (Object.keys(v.answers).length) await put(k, v); else await del(k);
+  }
+  const next = { ...poll, title, description: str(body.description, 4000), location: str(body.location, 200),
+    cost: parseCost(body.cost), options, updatedAt: now() };
+  await put(pk, next);
+  return { poll: await pollOut(m.group.id, next, await nameMap(m.group.id)) };
+});
+
 route('POST', '/groups/:gid/polls/:id/vote', async ({ req, body, params }) => {
   const m = await requireMember(req, params.gid);
   const poll = await get(`g/${m.group.id}/polls/${validId(params.id)}`);

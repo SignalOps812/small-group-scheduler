@@ -454,3 +454,20 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .code-inline { padding: 3px 8px; font-size: 14px; }
 .person .icon-btn { color: var(--label-2); }
 .auth-card form .group-foot { margin-bottom: 0; }
+
+/* ---------- Time picker & poll option rows ---------- */
+.tp { display: inline-flex; align-items: center; gap: 2px; flex: 0 0 auto; margin-left: auto; }
+.tp select {
+  appearance: none; -webkit-appearance: none; border: 0; outline: 0; cursor: pointer;
+  font-size: 16px; font-variant-numeric: tabular-nums; color: var(--blue); background: var(--fill-2);
+  padding: 6px 8px; border-radius: 8px; text-align: center; text-align-last: center; min-width: 44px;
+}
+.tp select:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 40%, transparent); }
+.tp select[name$="_p"] { margin-left: 4px; font-weight: 600; }
+.tp-colon { color: var(--label-2); font-weight: 600; padding: 0 1px; }
+.tp.tp-empty select:not([name$="_h"]), .tp.tp-empty .tp-colon { opacity: .4; }
+.row .tp { padding: 6px 0; }
+.opt-row { gap: 10px; flex-wrap: wrap; }
+.row.opt-row input.opt-date { flex: 1 1 140px; text-align: left; color: var(--blue); }
+.opt-remove[disabled] { opacity: .3; cursor: default; }
+@media (max-width: 420px) { .opt-row .tp { margin-left: 34px; } }
