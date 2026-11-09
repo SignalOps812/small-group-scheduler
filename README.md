@@ -1,4 +1,4 @@
-# Small Group Scheduler
+# Groups — Small Group Scheduler
 
 A shared calendar and date-polling app for small groups, hosted on Netlify.
 
@@ -7,6 +7,7 @@ A shared calendar and date-polling app for small groups, hosted on Netlify.
 - **Organizers:** whoever creates a group is its organizer. Organizers can rename the group, change its code (the old code stops working), make others organizers, and remove members. A group must always have at least one organizer. Any member can see the code, so they can invite people.
 - **Calendar:** any member can add an event with a title, description, date, time, location and cost. You can only edit or delete events you added; organizers can edit or delete any of them. Each event has an "Add to My Calendar" (.ics) button.
 - **Polls:** propose an event with two or more date and time options. Members mark each option Yes, Maybe or No. The poll shows who answered what, when they responded, and who hasn't replied yet. The poll's creator (or the organizer) picks the final date, and it goes on the calendar. The poll's creator or a group organizer can edit an open poll: change the details, add, change or remove dates. Adding dates keeps everyone's responses; changing an option's date or time clears the responses for that option only.
+- **Pitch-in:** turn on Pitch-in when creating a poll or an event. Members sign up for what they're bringing (dish and category: main, side, salad, bread, dessert, drinks, supplies, other) and everyone sees a "who's bringing what" summary. Sign-ups on a poll carry over to the event when the date is picked.
 - **Email:** every member of a group gets an email, with the group name in the subject, when an event is added, a poll is created, or a poll date is scheduled. Members can turn emails off from their profile. Password reset links also go out by email.
 
 No build step and no framework. The front end is plain HTML, CSS and JS in `public/`. The back end is one Netlify Function, `netlify/functions/api.mjs`, that stores data in **Netlify Blobs**, which is built into Netlify and needs no setup.
@@ -32,7 +33,7 @@ Go to **Site configuration → Environment variables** and add:
 
 | Variable | Required | Example | What it does |
 |---|---|---|---|
-| `APP_NAME` | recommended | `Foster Small Group` | The name shown in the app and in emails |
+| `APP_NAME` | optional | `Groups` | The app's name, shown in the header and sign-in page (default: Groups) |
 | `RESEND_API_KEY` | for email | `re_xxxxxxxx` | Your Resend API key (see below) |
 | `EMAIL_FROM` | for email | `Small Group <group@yourdomain.com>` | The sender. It must use a domain you've verified in Resend |
 | `APP_URL` | optional | `https://oursmallgroup.netlify.app` | The link used in emails. Netlify fills this in automatically; set it only if you use a custom domain |

@@ -491,3 +491,22 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .person-btn .pill, .person-btn .chev { flex: 0 0 auto; }
 @media (max-width: 420px) { .person-btn .pill { font-size: 11px; padding: 0 7px; } }
 .people { grid-template-columns: minmax(0, 1fr); }
+
+/* ---------- Pitch-in ---------- */
+.row-sub { display: block; font-size: 13px; color: var(--label-2); margin-top: 1px; }
+.row:has(.row-sub) { padding-top: 8px; padding-bottom: 8px; }
+.pills { display: inline-flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
+.bring-list { padding: 4px 0 6px; }
+.bring-cat {
+  display: flex; align-items: center; justify-content: space-between; padding: 12px 16px 6px;
+  font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: .02em; color: var(--label-2);
+}
+.bring-cat + .bring-item { margin-top: 0; }
+.bring-item { display: flex; align-items: center; gap: 10px; padding: 6px 16px; }
+.bring-item .bi-text { min-width: 0; }
+.bring-item .bi-text b { display: block; font-weight: 500; }
+.bring-item .bi-text small { display: block; font-size: 13px; color: var(--label-2); }
+.bring-select { appearance: none; -webkit-appearance: none; text-align: right; color: var(--blue); cursor: pointer; }
+.bring-actions { justify-content: space-between; padding-top: 10px; padding-bottom: 10px; }
+.danger-link { color: var(--red); font-size: 15px; }
+.bring-form .row > label { min-width: 104px; }

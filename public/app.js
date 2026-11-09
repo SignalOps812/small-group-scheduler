@@ -4,7 +4,7 @@
 
   // ---------- State ----------
   const S = {
-    config: { appName: 'Small Group' },
+    config: { appName: 'Groups' },
     me: null, groups: [], gid: null, events: [], polls: [], members: [],
     view: 'calendar', month: null, selected: null,
     authMode: 'signin', resetToken: null,
@@ -120,7 +120,7 @@
     const m = S.authMode;
     const name = esc(S.config.appName);
     const head = {
-      signin: ['Welcome back', `Sign in to see what ${name} has planned.`],
+      signin: ['Welcome back', 'Sign in to see what your groups have planned.'],
       signup: [`Join ${name}`, 'Create an account to see the calendar and vote on dates.'],
       forgot: ['Reset password', 'Enter your email and we\u2019ll send you a link to choose a new password.'],
       reset: ['Choose a new password', 'Make it at least 8 characters.'],
@@ -285,7 +285,7 @@
     return `<button class="event" style="--c:${colorFor(e.createdBy)}" data-action="open-event" data-id="${esc(e.id)}">
       <span class="bar"></span>
       <span><span class="title">${esc(e.title)}</span><span class="meta">${meta}</span></span>
-      <span class="side"><span class="time">${e.time ? fmtTime(e.time) : 'All day'}</span>${cost ? `<span class="pill ${e.cost === 0 ? 'green' : ''}">${esc(cost)}</span>` : ''}</span>
+      <span class="side"><span class="time">${e.time ? fmtTime(e.time) : 'All day'}</span><span class="pills">${e.pitchIn ? `<span class="pill purple">Pitch-in${e.contributions?.length ? ' · ' + e.contributions.length : ''}</span>` : ''}${cost ? `<span class="pill ${e.cost === 0 ? 'green' : ''}">${esc(cost)}</span>` : ''}</span></span>
     </button>`;
   }
 
@@ -301,7 +301,7 @@
       return `<button class="poll-card" data-action="open-poll" data-id="${esc(p.id)}">
         <div class="top">
           <div><h3>${esc(p.title)}</h3><div class="by">${esc(p.createdByName)} · ${p.options.length} option${p.options.length > 1 ? 's' : ''}</div></div>
-          ${p.status === 'open' ? (responded ? '<span class="pill green">Voted</span>' : '<span class="pill orange">Vote</span>') : '<span class="pill blue">Scheduled</span>'}
+          <span class="pills">${p.pitchIn ? '<span class="pill purple">Pitch-in</span>' : ''}${p.status === 'open' ? (responded ? '<span class="pill green">Voted</span>' : '<span class="pill orange">Vote</span>') : '<span class="pill blue">Scheduled</span>'}</span>
         </div>
         <div class="mini-tiles">${tiles}${!chosen && p.options.length > 5 ? `<span class="more">+${p.options.length - 5}</span>` : ''}</div>
         <div>
@@ -504,9 +504,9 @@
     const html = sheetHtml();
     $sheetRoot.innerHTML = `<div class="backdrop" data-action="backdrop"><div class="sheet ${kind === 'poll' ? 'wide' : ''}" role="dialog" aria-modal="true">${html}</div></div>`;
     document.body.style.overflow = 'hidden';
-    const first = $sheetRoot.querySelector('input:not([type=date]):not([type=time]):not([type=checkbox])');
-    if (first && matchMedia('(min-width: 761px)').matches) setTimeout(() => first.focus(), 60);
-    const form = $sheetRoot.querySelector('form');
+    const first = $sheetRoot.querySelector('form:not(.bring-form) input:not([type=date]):not([type=time]):not([type=checkbox])');
+    if (first && matchMedia('(min-width: 761px)').matches) setTimeout(() => { if (!$sheetRoot.contains(document.activeElement) || document.activeElement === document.body) first.focus(); }, 60);
+    const form = $sheetRoot.querySelector('form:not(.bring-form)');
     if (form) form.addEventListener('submit', (e) => { e.preventDefault(); onSheetSave(); });
     if (form && kind === 'group-new') wireCodeSuggest(form);
   }
@@ -553,6 +553,9 @@
           <div class="group">
             <div class="row stack"><textarea name="description" placeholder="Description — what to bring, who's hosting, anything people should know" maxlength="4000" aria-label="Description">${esc(e.description)}</textarea></div>
           </div>
+          <div class="group" style="margin-top:22px">
+            <div class="row"><span>Pitch-in<small class="row-sub">Let people sign up for what they\u2019re bringing</small></span><label class="switch"><input type="checkbox" name="pitchIn" ${e.pitchIn ? 'checked' : ''}><span></span></label></div>
+          </div>
           <p class="group-foot">Set the hour to -- for an all-day event. Enter 0 for a free event. ${s.id ? '' : 'Everyone in the group will get an email about it.'}</p>
           <div id="sheet-msg"></div>
         </div></form>`;
@@ -570,6 +573,7 @@
           </div>
           ${kv.length ? `<div class="group kv">${kv.map(([k, v]) => `<div class="row"><span>${k}</span><span class="v">${esc(v)}</span></div>`).join('')}</div>` : ''}
           ${e.description ? `<div class="group-label" style="margin-top:22px">Details</div><div class="group"><div class="detail-desc">${esc(e.description)}</div></div>` : ''}
+          ${e.pitchIn ? bringSection('event', e, true) : ''}
           <div class="actions">
             <button class="btn tinted block" data-action="ics" data-id="${esc(e.id)}">Add to My Calendar</button>
             ${canModify(e.createdBy) ? `<button class="btn tinted block" data-action="edit-event" data-id="${esc(e.id)}">Edit Event</button>
@@ -590,6 +594,9 @@
           </div>
           <div class="group">
             <div class="row stack"><textarea name="description" placeholder="Description (optional)" maxlength="4000" aria-label="Description">${esc(d.description)}</textarea></div>
+          </div>
+          <div class="group" style="margin-top:22px">
+            <div class="row"><span>Pitch-in<small class="row-sub">Let people sign up for what they\u2019re bringing</small></span><label class="switch"><input type="checkbox" name="pitchIn" ${d.pitchIn ? 'checked' : ''}><span></span></label></div>
           </div>
           <div class="group-label" style="margin-top:22px">Date options</div>
           <div class="group" id="opt-list">
@@ -646,6 +653,7 @@
           ${p.description ? `<div class="group" style="margin-top:22px"><div class="detail-desc">${esc(p.description)}</div></div>` : ''}
           <div class="group-label" style="margin-top:26px">${open ? 'Mark which dates work for you' : 'Results'}</div>
           <div class="options">${optHtml}</div>
+          ${p.pitchIn ? bringSection('poll', p, open) : ''}
           <div class="group-label" style="margin-top:26px">Responses · ${p.responders.length} of ${S.members.length}</div>
           <div class="group people">
             ${p.responders.length ? p.responders.map((r) => `<div class="person">${avatar(r.userId, r.name)}<div class="nm">${esc(r.name)}${r.userId === S.me.id ? ' <span class="muted">(you)</span>' : ''}<small>Responded ${esc(fmtStamp(r.at))}</small></div><span class="pill green">Replied</span></div>`).join('') : '<div class="person"><div class="nm muted">No one has replied yet.</div></div>'}
@@ -737,7 +745,7 @@
   }
 
   async function onSheetSave() {
-    const s = S.sheet, form = $sheetRoot.querySelector('form');
+    const s = S.sheet, form = $sheetRoot.querySelector('form:not(.bring-form)');
     if (!form) return;
     const btn = form.querySelector('button[type=submit]'), msg = form.querySelector('#sheet-msg');
     if (['group-new', 'group-join', 'group-edit'].includes(s.kind)) {
@@ -752,7 +760,7 @@
         if (!v.title.trim()) { btn.disabled = false; return err('Please add a title.'); }
         if (!v.date) { btn.disabled = false; return err('Please choose a date.'); }
         v.time = readTime(form, 'time');
-        const body = { title: v.title, location: v.location, date: v.date, time: v.time, cost: v.cost, description: v.description };
+        const body = { title: v.title, location: v.location, date: v.date, time: v.time, cost: v.cost, description: v.description, pitchIn: !!form.elements.pitchIn?.checked };
         const r = s.id ? await api('PUT', gp(`/events/${s.id}`), body) : await api('POST', gp('/events'), body);
         await loadAll();
         S.selected = r.event.date; const d = parseYmd(r.event.date); S.month = new Date(d.getFullYear(), d.getMonth(), 1);
@@ -765,7 +773,7 @@
         if (options.length < 2) { btn.disabled = false; return err('Add at least two dates for people to vote on.'); }
         const keys = options.map((o) => o.date + o.time);
         if (new Set(keys).size !== keys.length) { btn.disabled = false; return err('Two options have the same date and time. Change or remove one.'); }
-        const body = { title: v.title, location: v.location, cost: v.cost, description: v.description, options };
+        const body = { title: v.title, location: v.location, cost: v.cost, description: v.description, options, pitchIn: !!form.elements.pitchIn?.checked };
         const r = s.id ? await api('PUT', gp(`/polls/${s.id}`), body) : await api('POST', gp('/polls'), body);
         await loadAll();
         S.view = 'polls'; render();
@@ -777,6 +785,39 @@
         S.me = r.user; await loadAll(); closeSheet(); render(); toast('Profile saved');
       }
     } catch (ex) { err(ex.message); btn.disabled = false; }
+  }
+
+  // ---------- Pitch-in ----------
+  const BRING_CATS = ['Main dish', 'Side dish', 'Salad', 'Bread', 'Dessert', 'Drinks', 'Supplies', 'Other'];
+  function bringSection(kind, obj, editable) {
+    const list = obj.contributions || [];
+    const mine = list.find((c) => c.userId === S.me.id);
+    const groups = BRING_CATS.map((cat) => [cat, list.filter((c) => c.category === cat)]).filter(([, l]) => l.length);
+    const summary = groups.length
+      ? `<div class="group bring-list">${groups.map(([cat, l]) => `
+          <div class="bring-cat"><span>${esc(cat)}</span><span class="pill">${l.length}</span></div>
+          ${l.map((c) => `<div class="bring-item">${avatar(c.userId, c.name, 'xs')}<span class="bi-text"><b>${esc(c.item)}</b><small>${esc(c.name)}${c.userId === S.me.id ? ' (you)' : ''}</small></span></div>`).join('')}`).join('')}
+        </div>`
+      : `<div class="empty small" style="padding:18px">Nobody has signed up yet${editable ? ' — be the first!' : '.'}</div>`;
+    const form = editable ? `
+      <form class="group bring-form" data-kind="${kind}" data-id="${esc(obj.id)}" autocomplete="off" novalidate>
+        <div class="row"><label for="bring-item-${esc(obj.id)}">I\u2019m bringing</label><input id="bring-item-${esc(obj.id)}" name="item" maxlength="200" placeholder="e.g. Mac and cheese" value="${esc(mine?.item || '')}"></div>
+        <div class="row"><label for="bring-cat-${esc(obj.id)}">Category</label><select id="bring-cat-${esc(obj.id)}" name="category" class="bring-select">${BRING_CATS.map((c) => `<option${(mine?.category || 'Main dish') === c ? ' selected' : ''}>${c}</option>`).join('')}</select></div>
+        <div class="row bring-actions">
+          ${mine ? `<button type="button" class="link danger-link" data-action="bring-clear" data-kind="${kind}" data-id="${esc(obj.id)}">Remove mine</button>` : '<span></span>'}
+          <button type="submit" class="btn sm">${mine ? 'Update' : 'Sign Up'}</button>
+        </div>
+      </form>` : (kind === 'poll' && obj.eventId ? `<p class="group-foot">The date is set. Add or change what you\u2019re bringing on the calendar event.</p>` : '');
+    return `<div class="group-label" style="margin-top:26px">Pitch-in · who\u2019s bringing what${list.length ? ` · ${list.length}` : ''}</div>
+      ${summary}
+      ${form ? `<div class="group-label" style="margin-top:16px">${mine ? 'Your item' : 'What will you bring?'}</div>${form}` : ''}`;
+  }
+  async function saveBring(kind, id, item, category) {
+    const path = kind === 'poll' ? `/polls/${id}/bring` : `/events/${id}/bring`;
+    const r = await api('PUT', gp(path), { item, category });
+    if (kind === 'poll') { const i = S.polls.findIndex((x) => x.id === id); if (i >= 0) S.polls[i] = r.poll; }
+    else { const i = S.events.findIndex((x) => x.id === id); if (i >= 0) S.events[i] = r.event; }
+    refreshSheet(); render();
   }
 
   // ---------- Time picker & poll option rows ----------
@@ -964,6 +1005,9 @@
         toast(`You left ${g.name}`);
       } catch (ex) { toast(ex.message); }
     },
+    'bring-clear': async (el) => {
+      try { await saveBring(el.dataset.kind, el.dataset.id, '', ''); toast('Removed your item'); } catch (ex) { toast(ex.message); }
+    },
     'member-actions': (el) => openSheet('member', { id: el.dataset.id }),
     'copy-contact': async (el) => {
       const m = S.members.find((x) => x.id === el.dataset.id);
@@ -992,6 +1036,17 @@
     const fn = actions[el.dataset.action];
     if (fn) { if (el.tagName === 'BUTTON' && el.type !== 'submit') ev.preventDefault(); fn(el, ev); }
   });
+  document.addEventListener('submit', async (ev) => {
+    const f = ev.target;
+    if (!f.classList?.contains('bring-form')) return;
+    ev.preventDefault();
+    const itemEl = f.querySelector('[name="item"]'), catEl = f.querySelector('[name="category"]');
+    const item = itemEl.value.trim();
+    if (!item) { itemEl.focus(); return toast('Type what you\u2019re bringing'); }
+    const btn = f.querySelector('button[type=submit]'); btn.disabled = true;
+    try { await saveBring(f.dataset.kind, f.dataset.id, item, catEl.value); toast('Thanks — you\u2019re signed up'); }
+    catch (ex) { toast(ex.message); btn.disabled = false; }
+  });
   document.addEventListener('change', (ev) => {
     const el = ev.target;
     if (el.matches?.('select[data-tp]')) { const tp = el.closest('.tp'); tp.classList.toggle('tp-empty', !tp.querySelector('select').value); }
@@ -1013,6 +1068,7 @@
     if (!S.me || document.hidden) return;
     if (S.sheet && ['event-form', 'poll-form', 'profile', 'group-new', 'group-join', 'group-edit'].includes(S.sheet.kind)) return;
     if (document.getElementById('group-menu')) return;
+    if (document.activeElement?.closest?.('.bring-form')) return;
     try { await refreshGroups(); if (S.groups.length) await loadAll(); render(); if (S.sheet) refreshSheet(); } catch {}
   }
   setInterval(refresh, 30000);

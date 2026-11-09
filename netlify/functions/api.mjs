@@ -10,11 +10,12 @@
 //   names/<sha256(normalized name)> { groupId }   — keeps group names unique
 //   g/<gid>/members/<uid>          { userId, role: 'organizer'|'member', joinedAt }
 //   g/<gid>/events/<id>, g/<gid>/polls/<id>, g/<gid>/votes/<pollId>/<uid>, g/<gid>/emaillog/<ts>
+//   g/<gid>/bring/<p|e>-<id>/<uid>  { target, userId, item, category, at }   — pitch-in contributions
 import crypto from 'node:crypto';
 import { getStore } from '@netlify/blobs';
 
 const env = (k, d = '') => (globalThis.Netlify?.env?.get?.(k) ?? process.env[k] ?? d);
-const APP_NAME = () => env('APP_NAME', 'Small Group');
+const APP_NAME = () => env('APP_NAME', 'Groups');
 const APP_URL = () => (env('APP_URL') || env('URL') || 'http://localhost:8888').replace(/\/$/, '');
 const RESEND_API_KEY = () => env('RESEND_API_KEY');
 const EMAIL_FROM = () => env('EMAIL_FROM') || `${APP_NAME()} <onboarding@resend.dev>`;
@@ -268,7 +269,8 @@ const deepLink = (gid, hash) => `${APP_URL()}/?g=${encodeURIComponent(gid)}#${ha
 function notifyNewEvent(ctx, group, ev, byName, viaPoll) {
   const when = `${fmtDate(ev.date)}${ev.time ? ' at ' + fmtTime(ev.time) : ''}`;
   const link = deepLink(group.id, `calendar/${ev.date}`);
-  const intro = `<p style="margin:0 0 8px">${esc(byName)} ${viaPoll ? 'picked the final date from the poll' : 'added an event to the calendar'}.</p>`;
+  const intro = `<p style="margin:0 0 8px">${esc(byName)} ${viaPoll ? 'picked the final date from the poll' : 'added an event to the calendar'}.</p>` +
+    (ev.pitchIn ? `<p style="margin:0 0 8px"><b>It\u2019s a pitch-in.</b> Open the event to see who\u2019s bringing what and add your dish.</p>` : '');
   return notifyGroup(ctx, group,
     `${viaPoll ? 'Scheduled' : 'New event'}: ${ev.title} — ${when}`,
     `${viaPoll ? 'It’s on the calendar' : 'New event'}: ${esc(ev.title)}`,
@@ -282,7 +284,7 @@ function notifyNewPoll(ctx, group, poll, byName) {
   return notifyGroup(ctx, group,
     `New poll: ${poll.title} — please vote`,
     `Help pick a date: ${esc(poll.title)}`,
-    `<p style="margin:0 0 8px">${esc(byName)} wants to find a time that works for everyone. Mark the dates you can make.</p>` +
+    `<p style="margin:0 0 8px">${esc(byName)} wants to find a time that works for everyone. Mark the dates you can make${poll.pitchIn ? ', and say what you\u2019ll bring to the pitch-in' : ''}.</p>` +
       detailRows([['Where', poll.location], ['Cost', fmtCost(poll.cost)], ['Details', poll.description]]) +
       `<p style="margin:10px 0 4px;color:#8e8e93;font-size:14px">Proposed times</p><ul style="margin:0;padding-left:20px">${list}</ul>`,
     'Vote now', link,
@@ -297,7 +299,29 @@ async function nameMap(gid) {
   for (const u of users) if (u) m[u.id] = u.name;
   return m;
 }
-const eventOut = (e, names) => ({ ...e, createdByName: names[e.createdBy] || 'Former member' });
+// ---------- Pitch-in ----------
+const BRING_CATS = ['Main dish', 'Side dish', 'Salad', 'Bread', 'Dessert', 'Drinks', 'Supplies', 'Other'];
+const bringPrefix = (gid, target) => `g/${gid}/bring/${target}/`;
+const contribOut = (c, names) => ({ userId: c.userId, name: names[c.userId] || 'Former member', item: c.item, category: c.category, at: c.at });
+async function contributions(gid, target, names) {
+  return (await listAll(bringPrefix(gid, target))).sort((a, b) => a.at.localeCompare(b.at)).map((c) => contribOut(c, names));
+}
+async function saveContribution(gid, target, uid, body) {
+  const key = bringPrefix(gid, target) + uid;
+  const item = str(body?.item, 200);
+  if (!item) { await del(key); return; }
+  const category = BRING_CATS.includes(body?.category) ? body.category : 'Other';
+  await put(key, { target, userId: uid, item, category, at: now() });
+}
+async function clearContributions(gid, target) {
+  await Promise.all((await keys(bringPrefix(gid, target))).map((k) => del(k)));
+}
+
+const eventOut = (e, names, contribs) => ({ ...e, pitchIn: !!e.pitchIn, createdByName: names[e.createdBy] || 'Former member',
+  ...(e.pitchIn ? { contributions: (contribs || []).map((c) => contribOut(c, names)).sort((a, b) => a.at.localeCompare(b.at)) } : {}) });
+async function eventOutOne(gid, e, names) {
+  return eventOut(e, names, e.pitchIn ? await listAll(bringPrefix(gid, `e-${e.id}`)) : []);
+}
 async function pollOut(gid, p, names) {
   const votes = await listAll(`g/${gid}/votes/${p.id}/`);
   const options = p.options.map((o) => ({
@@ -307,7 +331,8 @@ async function pollOut(gid, p, names) {
   const responders = votes.filter((v) => Object.keys(v.answers).length)
     .sort((a, b) => a.at.localeCompare(b.at))
     .map((v) => ({ userId: v.userId, name: names[v.userId] || 'Former member', at: v.at }));
-  return { ...p, options, responders, createdByName: names[p.createdBy] || 'Former member' };
+  return { ...p, pitchIn: !!p.pitchIn, options, responders, createdByName: names[p.createdBy] || 'Former member',
+    ...(p.pitchIn ? { contributions: await contributions(gid, `p-${p.id}`, names) } : {}) };
 }
 function readEventBody(body) {
   const title = str(body.title, 120), description = str(body.description, 4000), location = str(body.location, 200);
@@ -315,7 +340,7 @@ function readEventBody(body) {
   if (!title) throw new HttpError(400, 'Please add a title.');
   if (!isDate(date)) throw new HttpError(400, 'Please choose a date.');
   if (!isTime(time)) throw new HttpError(400, 'Please choose a valid time.');
-  return { title, description, location, date, time, cost: parseCost(body.cost) };
+  return { title, description, location, date, time, cost: parseCost(body.cost), pitchIn: !!body.pitchIn };
 }
 
 // ---------- Routes ----------
@@ -527,8 +552,10 @@ route('GET', '/groups/:gid/email-log', async ({ req, params }) => {
 // --- Events ---
 route('GET', '/groups/:gid/events', async ({ req, params }) => {
   const m = await requireMember(req, params.gid);
-  const [events, names] = await Promise.all([listAll(`g/${m.group.id}/events/`), nameMap(m.group.id)]);
-  return { events: events.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)).map((e) => eventOut(e, names)) };
+  const [events, names, bring] = await Promise.all([listAll(`g/${m.group.id}/events/`), nameMap(m.group.id), listAll(`g/${m.group.id}/bring/`)]);
+  const byTarget = {};
+  for (const c of bring) (byTarget[c.target] ||= []).push(c);
+  return { events: events.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)).map((e) => eventOut(e, names, byTarget[`e-${e.id}`])) };
 });
 
 route('POST', '/groups/:gid/events', async ({ req, body, params, ctx }) => {
@@ -536,7 +563,7 @@ route('POST', '/groups/:gid/events', async ({ req, body, params, ctx }) => {
   const ev = { id: newId(), ...readEventBody(body), createdBy: m.user.id, pollId: null, createdAt: now() };
   await put(`g/${m.group.id}/events/${ev.id}`, ev);
   await notifyNewEvent(ctx, m.group, ev, m.user.name, false);
-  return { event: eventOut(ev, { [m.user.id]: m.user.name }) };
+  return { event: eventOut(ev, { [m.user.id]: m.user.name }, []) };
 });
 
 route('PUT', '/groups/:gid/events/:id', async ({ req, body, params }) => {
@@ -547,7 +574,7 @@ route('PUT', '/groups/:gid/events/:id', async ({ req, body, params }) => {
   if (!canModify(m, ev.createdBy)) throw new HttpError(403, 'Only the person who added this event can edit it.');
   const next = { ...ev, ...readEventBody(body), updatedAt: now() };
   await put(key, next);
-  return { event: eventOut(next, await nameMap(m.group.id)) };
+  return { event: await eventOutOne(m.group.id, next, await nameMap(m.group.id)) };
 });
 
 route('DELETE', '/groups/:gid/events/:id', async ({ req, params }) => {
@@ -557,12 +584,22 @@ route('DELETE', '/groups/:gid/events/:id', async ({ req, params }) => {
   if (!ev) throw new HttpError(404, 'Event not found.');
   if (!canModify(m, ev.createdBy)) throw new HttpError(403, 'Only the person who added this event can delete it.');
   await del(key);
+  await clearContributions(m.group.id, `e-${ev.id}`);
   if (ev.pollId) { // re-open the poll it came from
     const pk = `g/${m.group.id}/polls/${ev.pollId}`;
     const p = await get(pk);
     if (p) await put(pk, { ...p, status: 'open', eventId: null, scheduledOptionId: null });
   }
   return { ok: true };
+});
+
+route('PUT', '/groups/:gid/events/:id/bring', async ({ req, body, params }) => {
+  const m = await requireMember(req, params.gid);
+  const ev = await get(`g/${m.group.id}/events/${validId(params.id)}`);
+  if (!ev) throw new HttpError(404, 'Event not found.');
+  if (!ev.pitchIn) throw new HttpError(400, 'This event isn\u2019t a pitch-in.');
+  await saveContribution(m.group.id, `e-${ev.id}`, m.user.id, body);
+  return { event: await eventOutOne(m.group.id, ev, await nameMap(m.group.id)) };
 });
 
 // --- Polls ---
@@ -587,7 +624,7 @@ route('POST', '/groups/:gid/polls', async ({ req, body, params, ctx }) => {
   if (options.length < 2) throw new HttpError(400, 'Add at least two date options for people to vote on.');
   options.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
   const poll = { id: newId(), title, description: str(body.description, 4000), location: str(body.location, 200), cost: parseCost(body.cost),
-    options, status: 'open', eventId: null, scheduledOptionId: null, createdBy: m.user.id, createdAt: now() };
+    options, pitchIn: !!body.pitchIn, status: 'open', eventId: null, scheduledOptionId: null, createdBy: m.user.id, createdAt: now() };
   await put(`g/${m.group.id}/polls/${poll.id}`, poll);
   await notifyNewPoll(ctx, m.group, poll, m.user.name);
   return { poll: await pollOut(m.group.id, poll, { [m.user.id]: m.user.name }) };
@@ -631,9 +668,19 @@ route('PUT', '/groups/:gid/polls/:id', async ({ req, body, params }) => {
     if (Object.keys(v.answers).length) await put(k, v); else await del(k);
   }
   const next = { ...poll, title, description: str(body.description, 4000), location: str(body.location, 200),
-    cost: parseCost(body.cost), options, updatedAt: now() };
+    cost: parseCost(body.cost), options, pitchIn: !!body.pitchIn, updatedAt: now() };
   await put(pk, next);
   return { poll: await pollOut(m.group.id, next, await nameMap(m.group.id)) };
+});
+
+route('PUT', '/groups/:gid/polls/:id/bring', async ({ req, body, params }) => {
+  const m = await requireMember(req, params.gid);
+  const poll = await get(`g/${m.group.id}/polls/${validId(params.id)}`);
+  if (!poll) throw new HttpError(404, 'Poll not found.');
+  if (!poll.pitchIn) throw new HttpError(400, 'This poll isn\u2019t collecting pitch-in items.');
+  if (poll.status !== 'open') throw new HttpError(400, 'A date has been picked — add what you\u2019re bringing on the calendar event instead.');
+  await saveContribution(m.group.id, `p-${poll.id}`, m.user.id, body);
+  return { poll: await pollOut(m.group.id, poll, await nameMap(m.group.id)) };
 });
 
 route('POST', '/groups/:gid/polls/:id/vote', async ({ req, body, params }) => {
@@ -664,13 +711,18 @@ route('POST', '/groups/:gid/polls/:id/schedule', async ({ req, body, params, ctx
   const opt = poll.options.find((o) => o.id === body.optionId);
   if (!opt) throw new HttpError(400, 'Please choose one of the poll’s dates.');
   const ev = { id: newId(), title: poll.title, description: poll.description, date: opt.date, time: opt.time, cost: poll.cost,
-    location: poll.location, createdBy: m.user.id, pollId: poll.id, createdAt: now() };
+    location: poll.location, pitchIn: !!poll.pitchIn, createdBy: m.user.id, pollId: poll.id, createdAt: now() };
   await put(`g/${m.group.id}/events/${ev.id}`, ev);
+  if (poll.pitchIn) { // carry everyone's pitch-in items over to the calendar event
+    for (const c of await listAll(bringPrefix(m.group.id, `p-${poll.id}`))) {
+      await put(bringPrefix(m.group.id, `e-${ev.id}`) + c.userId, { ...c, target: `e-${ev.id}` });
+    }
+  }
   const next = { ...poll, status: 'scheduled', eventId: ev.id, scheduledOptionId: opt.id, scheduledAt: now() };
   await put(pk, next);
   await notifyNewEvent(ctx, m.group, ev, m.user.name, true);
   const names = await nameMap(m.group.id);
-  return { poll: await pollOut(m.group.id, next, names), event: eventOut(ev, names) };
+  return { poll: await pollOut(m.group.id, next, names), event: await eventOutOne(m.group.id, ev, names) };
 });
 
 route('DELETE', '/groups/:gid/polls/:id', async ({ req, params }) => {
@@ -680,6 +732,7 @@ route('DELETE', '/groups/:gid/polls/:id', async ({ req, params }) => {
   if (!poll) throw new HttpError(404, 'Poll not found.');
   if (!canModify(m, poll.createdBy)) throw new HttpError(403, 'Only the person who created this poll can delete it.');
   await Promise.all((await keys(`g/${m.group.id}/votes/${poll.id}/`)).map((k) => del(k)));
+  await clearContributions(m.group.id, `p-${poll.id}`);
   await del(pk);
   if (poll.eventId) {
     const ek = `g/${m.group.id}/events/${poll.eventId}`;
