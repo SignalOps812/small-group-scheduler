@@ -1,12 +1,20 @@
 // Small Group Scheduler — Netlify Function (all /api/* routes)
 // Storage: Netlify Blobs · Passwords: scrypt · Email: Resend HTTP API
+//
+// Key layout (store "smallgroup"):
+//   users/<uid>                    { id, name, email, pwHash, notify, groups: [gid], createdAt }
+//   emails/<email>                 { userId }
+//   sessions/<token>, resets/<token>
+//   groups/<gid>                   { id, name, code, createdBy, createdAt }
+//   codes/<code>                   { groupId }
+//   g/<gid>/members/<uid>          { userId, role: 'organizer'|'member', joinedAt }
+//   g/<gid>/events/<id>, g/<gid>/polls/<id>, g/<gid>/votes/<pollId>/<uid>, g/<gid>/emaillog/<ts>
 import crypto from 'node:crypto';
 import { getStore } from '@netlify/blobs';
 
 const env = (k, d = '') => (globalThis.Netlify?.env?.get?.(k) ?? process.env[k] ?? d);
 const APP_NAME = () => env('APP_NAME', 'Small Group');
 const APP_URL = () => (env('APP_URL') || env('URL') || 'http://localhost:8888').replace(/\/$/, '');
-const GROUP_CODE = () => env('GROUP_CODE').trim();
 const RESEND_API_KEY = () => env('RESEND_API_KEY');
 const EMAIL_FROM = () => env('EMAIL_FROM') || `${APP_NAME()} <onboarding@resend.dev>`;
 const SESSION_DAYS = 60;
@@ -19,9 +27,9 @@ const store = () => (_store ||= getStore({ name: 'smallgroup', consistency: 'str
 const get = (key) => store().get(key, { type: 'json' });
 const put = (key, val) => store().setJSON(key, val);
 const del = (key) => store().delete(key);
+const keys = async (prefix) => (await store().list({ prefix })).blobs.map((b) => b.key);
 async function listAll(prefix) {
-  const { blobs } = await store().list({ prefix });
-  const vals = await Promise.all(blobs.map((b) => get(b.key)));
+  const vals = await Promise.all((await keys(prefix)).map((k) => get(k)));
   return vals.filter(Boolean);
 }
 const newId = () => crypto.randomBytes(9).toString('base64url');
@@ -34,11 +42,19 @@ const isEmail = (s) => typeof s === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.tes
 const isDate = (s) => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s) && !isNaN(Date.parse(s));
 const isTime = (s) => s === '' || (typeof s === 'string' && /^([01]\d|2[0-3]):[0-5]\d$/.test(s));
 const str = (v, max = 2000) => (typeof v === 'string' ? v.trim().slice(0, max) : '');
+const validId = (id) => { if (!/^[\w-]{1,40}$/.test(id)) throw new HttpError(404, 'Not found.'); return id; };
 function parseCost(v) {
   if (v === null || v === undefined || v === '') return null;
   const n = Number(String(v).replace(/[$,\s]/g, ''));
   if (!Number.isFinite(n) || n < 0 || n > 1e6) throw new HttpError(400, 'Cost must be a positive number.');
   return Math.round(n * 100) / 100;
+}
+const normCode = (c) => str(c, 60).toLowerCase().replace(/\s+/g, '-');
+function checkCode(code) {
+  if (!/^[a-z0-9][a-z0-9-]{2,22}[a-z0-9]$/.test(code)) {
+    throw new HttpError(400, 'Group codes are 4–24 characters: letters, numbers and dashes.');
+  }
+  return code;
 }
 
 const SCRYPT = { N: 16384, r: 8, p: 1 };
@@ -77,15 +93,37 @@ async function currentUser(req) {
   if (!s) return null;
   if (s.expiresAt < Date.now()) { await del(`sessions/${token}`); return null; }
   const u = await get(`users/${s.userId}`);
-  return u ? { ...u, token } : null;
+  return u ? { ...u, groups: u.groups || [] } : null;
 }
 async function requireUser(req) {
   const u = await currentUser(req);
   if (!u) throw new HttpError(401, 'Please sign in.');
   return u;
 }
-const publicUser = (u) => ({ id: u.id, name: u.name, email: u.email, isAdmin: !!u.isAdmin, notify: u.notify !== false });
-const canModify = (u, ownerId) => u.isAdmin || u.id === ownerId;
+async function saveUser(u) { const { token, ...rest } = u; await put(`users/${u.id}`, rest); }
+
+// Membership check: returns { user, group, member }
+async function requireMember(req, gid) {
+  const user = await requireUser(req);
+  validId(gid);
+  const [group, member] = await Promise.all([get(`groups/${gid}`), get(`g/${gid}/members/${user.id}`)]);
+  if (!group || !member) throw new HttpError(403, 'You’re not a member of this group.');
+  return { user, group, member, organizer: member.role === 'organizer' };
+}
+const canModify = (m, ownerId) => m.organizer || m.user.id === ownerId;
+
+async function groupSummary(gid, uid) {
+  const [g, m, memberKeys] = await Promise.all([get(`groups/${gid}`), get(`g/${gid}/members/${uid}`), keys(`g/${gid}/members/`)]);
+  if (!g || !m) return null;
+  return { id: g.id, name: g.name, code: g.code, role: m.role, memberCount: memberKeys.length, createdAt: g.createdAt };
+}
+async function myGroups(u) {
+  return (await Promise.all(u.groups.map((gid) => groupSummary(gid, u.id)))).filter(Boolean);
+}
+async function addMember(u, gid, role) {
+  await put(`g/${gid}/members/${u.id}`, { userId: u.id, role, joinedAt: now() });
+  if (!u.groups.includes(gid)) { u.groups = [...u.groups, gid]; await saveUser(u); }
+}
 
 // Best-effort rate limiting (per function instance)
 const hits = new Map();
@@ -94,6 +132,32 @@ function rateLimit(key, max, windowMs) {
   const arr = (hits.get(key) || []).filter((x) => t - x < windowMs);
   arr.push(t); hits.set(key, arr);
   if (arr.length > max) throw new HttpError(429, 'Too many attempts. Please wait a few minutes and try again.');
+}
+
+// ---------- One-time migration from the single-group version ----------
+let migrated = false;
+async function migrateLegacy() {
+  if (migrated) return;
+  if (await get('meta/v2')) { migrated = true; return; }
+  const [legacyEvents, legacyPolls, users] = await Promise.all([keys('events/'), keys('polls/'), listAll('users/')]);
+  const legacyUsers = users.filter((u) => !u.groups);
+  if (legacyUsers.length || legacyEvents.length || legacyPolls.length) {
+    const gid = newId();
+    let code = 'group-' + crypto.randomBytes(3).toString('hex');
+    await put(`groups/${gid}`, { id: gid, name: APP_NAME(), code, createdBy: (legacyUsers.find((u) => u.isAdmin) || legacyUsers[0] || {}).id || null, createdAt: now() });
+    await put(`codes/${code}`, { groupId: gid });
+    for (const u of legacyUsers) {
+      await put(`g/${gid}/members/${u.id}`, { userId: u.id, role: u.isAdmin ? 'organizer' : 'member', joinedAt: u.createdAt || now() });
+      const { isAdmin, ...rest } = u;
+      await put(`users/${u.id}`, { ...rest, groups: [gid] });
+    }
+    for (const k of legacyEvents) { const v = await get(k); if (v) await put(`g/${gid}/${k}`, v); await del(k); }
+    for (const k of legacyPolls) { const v = await get(k); if (v) await put(`g/${gid}/${k}`, v); await del(k); }
+    for (const k of await keys('votes/')) { const v = await get(k); if (v) await put(`g/${gid}/${k}`, v); await del(k); }
+    for (const k of await keys('emaillog/')) await del(k);
+  }
+  await put('meta/v2', { at: now() });
+  migrated = true;
 }
 
 // ---------- Email ----------
@@ -109,32 +173,33 @@ function fmtTime(t) {
 }
 const fmtCost = (c) => (c === null || c === undefined ? '' : c === 0 ? 'Free' : `$${Number(c).toFixed(c % 1 ? 2 : 0)}`);
 
-function emailShell(heading, bodyHtml, ctaText, ctaUrl) {
+function emailShell(label, heading, bodyHtml, ctaText, ctaUrl, footer) {
   return `<!doctype html><html><body style="margin:0;background:#f2f2f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;color:#1c1c1e">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="padding:32px 12px"><tr><td align="center">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="max-width:520px;background:#ffffff;border-radius:18px;overflow:hidden">
-    <tr><td style="padding:28px 28px 8px;font-size:13px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#8e8e93">${esc(APP_NAME())}</td></tr>
+    <tr><td style="padding:28px 28px 8px;font-size:13px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#8e8e93">${esc(label)}</td></tr>
     <tr><td style="padding:0 28px;font-size:24px;font-weight:700;line-height:1.25">${heading}</td></tr>
     <tr><td style="padding:16px 28px 8px;font-size:16px;line-height:1.5">${bodyHtml}</td></tr>
     <tr><td style="padding:16px 28px 30px"><a href="${esc(ctaUrl)}" style="display:inline-block;background:#007aff;color:#ffffff;text-decoration:none;font-weight:600;font-size:16px;padding:12px 22px;border-radius:12px">${esc(ctaText)}</a></td></tr>
   </table>
-  <p style="font-size:12px;color:#8e8e93;margin:16px 0 0">You're receiving this as a member of ${esc(APP_NAME())}. You can turn these emails off from your profile.</p>
+  <p style="font-size:12px;color:#8e8e93;margin:16px 0 0">${esc(footer)}</p>
   </td></tr></table></body></html>`;
 }
 const detailRows = (rows) => `<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;margin:6px 0 4px;font-size:15px">` +
   rows.filter(([, v]) => v).map(([k, v]) => `<tr><td style="padding:6px 0;color:#8e8e93;width:90px;vertical-align:top">${esc(k)}</td><td style="padding:6px 0;white-space:pre-line">${esc(v)}</td></tr>`).join('') + `</table>`;
 
-async function logEmail(subject, recipients, status, detail = '') {
+async function logEmail(gid, subject, recipients, status, detail = '') {
+  if (!gid) return;
   const at = now();
-  try { await put(`emaillog/${at}-${newId()}`, { subject, recipients, status, detail, at }); } catch {}
+  try { await put(`g/${gid}/emaillog/${at}-${newId()}`, { subject, recipients, status, detail, at }); } catch {}
 }
-async function sendEmail({ to, subject, html, text }) {
+async function sendEmail({ to, subject, html, text, gid }) {
   const recipients = Array.isArray(to) ? to : [to];
   if (!recipients.length) return;
   const key = RESEND_API_KEY();
   if (!key) {
     console.log(`[email:not-configured] "${subject}" → ${recipients.length} recipient(s)`);
-    return logEmail(subject, recipients.length, 'skipped', 'RESEND_API_KEY is not set');
+    return logEmail(gid, subject, recipients.length, 'skipped', 'RESEND_API_KEY is not set');
   }
   try {
     for (let i = 0; i < recipients.length; i += 100) { // one message per person keeps addresses private
@@ -146,48 +211,57 @@ async function sendEmail({ to, subject, html, text }) {
       });
       if (!r.ok) throw new Error(`Resend ${r.status}: ${(await r.text()).slice(0, 300)}`);
     }
-    await logEmail(subject, recipients.length, 'sent');
+    await logEmail(gid, subject, recipients.length, 'sent');
   } catch (err) {
     console.error('[email] failed:', err.message);
-    await logEmail(subject, recipients.length, 'failed', err.message);
+    await logEmail(gid, subject, recipients.length, 'failed', err.message);
   }
 }
-async function notifyAll(ctx, subject, html, text) {
-  const users = await listAll('users/');
-  const to = users.filter((u) => u.notify !== false).map((u) => u.email);
-  ctx.background(sendEmail({ to, subject, html, text }));
+async function notifyGroup(ctx, group, subject, heading, body, ctaText, ctaUrl, text) {
+  const memberIds = (await keys(`g/${group.id}/members/`)).map((k) => k.split('/').pop());
+  const users = await Promise.all(memberIds.map((id) => get(`users/${id}`)));
+  const to = users.filter((u) => u && u.notify !== false).map((u) => u.email);
+  const html = emailShell(group.name, heading, body, ctaText, ctaUrl,
+    `You're receiving this as a member of ${group.name}. You can turn these emails off from your profile.`);
+  ctx.background(sendEmail({ to, subject: `[${group.name}] ${subject}`, html, text, gid: group.id }));
 }
-function notifyNewEvent(ctx, ev, byName, viaPoll) {
+const deepLink = (gid, hash) => `${APP_URL()}/?g=${encodeURIComponent(gid)}#${hash}`;
+
+function notifyNewEvent(ctx, group, ev, byName, viaPoll) {
   const when = `${fmtDate(ev.date)}${ev.time ? ' at ' + fmtTime(ev.time) : ''}`;
-  const link = `${APP_URL()}/#calendar/${ev.date}`;
+  const link = deepLink(group.id, `calendar/${ev.date}`);
   const intro = `<p style="margin:0 0 8px">${esc(byName)} ${viaPoll ? 'picked the final date from the poll' : 'added an event to the calendar'}.</p>`;
-  return notifyAll(ctx,
+  return notifyGroup(ctx, group,
     `${viaPoll ? 'Scheduled' : 'New event'}: ${ev.title} — ${when}`,
-    emailShell(`${viaPoll ? 'It’s on the calendar' : 'New event'}: ${esc(ev.title)}`,
-      intro + detailRows([['When', when], ['Where', ev.location], ['Cost', fmtCost(ev.cost)], ['Details', ev.description]]), 'Open calendar', link),
+    `${viaPoll ? 'It’s on the calendar' : 'New event'}: ${esc(ev.title)}`,
+    intro + detailRows([['When', when], ['Where', ev.location], ['Cost', fmtCost(ev.cost)], ['Details', ev.description]]),
+    'Open calendar', link,
     `${byName} ${viaPoll ? 'scheduled' : 'added'} "${ev.title}" for ${when}.${ev.location ? '\nWhere: ' + ev.location : ''}${ev.description ? '\n\n' + ev.description : ''}\n\n${link}`);
 }
-function notifyNewPoll(ctx, poll, byName) {
-  const link = `${APP_URL()}/#polls/${poll.id}`;
+function notifyNewPoll(ctx, group, poll, byName) {
+  const link = deepLink(group.id, `polls/${poll.id}`);
   const list = poll.options.map((o) => `<li style="margin:2px 0">${esc(fmtDate(o.date))}${o.time ? ' · ' + esc(fmtTime(o.time)) : ''}</li>`).join('');
-  return notifyAll(ctx,
+  return notifyGroup(ctx, group,
     `New poll: ${poll.title} — please vote`,
-    emailShell(`Help pick a date: ${esc(poll.title)}`,
-      `<p style="margin:0 0 8px">${esc(byName)} wants to find a time that works for everyone. Mark the dates you can make.</p>` +
+    `Help pick a date: ${esc(poll.title)}`,
+    `<p style="margin:0 0 8px">${esc(byName)} wants to find a time that works for everyone. Mark the dates you can make.</p>` +
       detailRows([['Where', poll.location], ['Cost', fmtCost(poll.cost)], ['Details', poll.description]]) +
-      `<p style="margin:10px 0 4px;color:#8e8e93;font-size:14px">Proposed times</p><ul style="margin:0;padding-left:20px">${list}</ul>`, 'Vote now', link),
+      `<p style="margin:10px 0 4px;color:#8e8e93;font-size:14px">Proposed times</p><ul style="margin:0;padding-left:20px">${list}</ul>`,
+    'Vote now', link,
     `${byName} created a poll: "${poll.title}". Vote here: ${link}`);
 }
 
 // ---------- Data shaping ----------
-async function nameMap() {
+async function nameMap(gid) {
+  const ids = (await keys(`g/${gid}/members/`)).map((k) => k.split('/').pop());
+  const users = await Promise.all(ids.map((id) => get(`users/${id}`)));
   const m = {};
-  for (const u of await listAll('users/')) m[u.id] = u.name;
+  for (const u of users) if (u) m[u.id] = u.name;
   return m;
 }
 const eventOut = (e, names) => ({ ...e, createdByName: names[e.createdBy] || 'Former member' });
-async function pollOut(p, names) {
-  const votes = await listAll(`votes/${p.id}/`); // one record per person: { userId, answers: {optionId: 'yes'|'maybe'|'no'}, at }
+async function pollOut(gid, p, names) {
+  const votes = await listAll(`g/${gid}/votes/${p.id}/`);
   const options = p.options.map((o) => ({
     ...o,
     votes: votes.filter((v) => v.answers[o.id]).map((v) => ({ userId: v.userId, name: names[v.userId] || 'Former member', answer: v.answers[o.id], at: v.at })),
@@ -197,7 +271,6 @@ async function pollOut(p, names) {
     .map((v) => ({ userId: v.userId, name: names[v.userId] || 'Former member', at: v.at }));
   return { ...p, options, responders, createdByName: names[p.createdBy] || 'Former member' };
 }
-
 function readEventBody(body) {
   const title = str(body.title, 120), description = str(body.description, 4000), location = str(body.location, 200);
   const date = str(body.date, 10), time = str(body.time, 5);
@@ -206,15 +279,15 @@ function readEventBody(body) {
   if (!isTime(time)) throw new HttpError(400, 'Please choose a valid time.');
   return { title, description, location, date, time, cost: parseCost(body.cost) };
 }
-const validId = (id) => { if (!/^[\w-]{1,40}$/.test(id)) throw new HttpError(404, 'Not found.'); return id; };
 
 // ---------- Routes ----------
 const routes = [];
 const route = (method, pattern, handler) =>
   routes.push({ method, re: new RegExp('^/api' + pattern.replace(/:(\w+)/g, '(?<$1>[^/]+)') + '$'), handler });
 
-route('GET', '/config', () => ({ appName: APP_NAME(), requireCode: !!GROUP_CODE() }));
+route('GET', '/config', () => ({ appName: APP_NAME() }));
 
+// --- Accounts ---
 route('POST', '/register', async ({ body, ctx }) => {
   rateLimit('reg:' + ctx.ip, 10, 15 * 60e3);
   const name = str(body.name, 80), email = str(body.email, 200).toLowerCase();
@@ -222,11 +295,8 @@ route('POST', '/register', async ({ body, ctx }) => {
   if (!name) throw new HttpError(400, 'Please enter your name.');
   if (!isEmail(email)) throw new HttpError(400, 'Please enter a valid email address.');
   if (password.length < 8) throw new HttpError(400, 'Password must be at least 8 characters.');
-  const code = GROUP_CODE();
-  if (code && str(body.code).toLowerCase() !== code.toLowerCase()) throw new HttpError(403, 'That group code isn’t right. Ask your group leader for it.');
   if (await get(`emails/${email}`)) throw new HttpError(409, 'An account with that email already exists. Try signing in.');
-  const { blobs } = await store().list({ prefix: 'users/' });
-  const user = { id: newId(), name, email, pwHash: hashPassword(password), isAdmin: blobs.length === 0, notify: true, createdAt: now() };
+  const user = { id: newId(), name, email, pwHash: hashPassword(password), notify: true, groups: [], createdAt: now() };
   await put(`users/${user.id}`, user);
   await put(`emails/${email}`, { userId: user.id });
   await createSession(ctx, user.id);
@@ -262,7 +332,7 @@ route('POST', '/forgot', async ({ body, ctx }) => {
     await put(`resets/${token}`, { userId: u.id, expiresAt: Date.now() + 3600e3 });
     const link = `${APP_URL()}/#reset/${token}`;
     ctx.background(sendEmail({ to: u.email, subject: `Reset your ${APP_NAME()} password`,
-      html: emailShell('Reset your password', `<p style="margin:0">Hi ${esc(u.name)}, tap the button below to choose a new password. The link expires in one hour. If you didn't ask for this, you can ignore this email.</p>`, 'Choose a new password', link),
+      html: emailShell(APP_NAME(), 'Reset your password', `<p style="margin:0">Hi ${esc(u.name)}, tap the button below to choose a new password. The link expires in one hour. If you didn't ask for this, you can ignore this email.</p>`, 'Choose a new password', link, `Sent by ${APP_NAME()}.`),
       text: `Reset your password: ${link} (expires in 1 hour)` }));
   }
   return { ok: true }; // same answer either way, so emails can't be probed
@@ -283,75 +353,180 @@ route('POST', '/reset', async ({ body, ctx }) => {
 
 route('GET', '/me', async ({ req }) => {
   const u = await currentUser(req);
-  return { user: u ? publicUser(u) : null };
+  if (!u) return { user: null, groups: [] };
+  return { user: { id: u.id, name: u.name, email: u.email, notify: u.notify !== false }, groups: await myGroups(u) };
 });
 
 route('PATCH', '/me', async ({ req, body }) => {
   const u = await requireUser(req);
-  const next = { ...u }; delete next.token;
-  if (typeof body.notify === 'boolean') next.notify = body.notify;
+  if (typeof body.notify === 'boolean') u.notify = body.notify;
   if (body.name !== undefined) {
     const name = str(body.name, 80);
     if (!name) throw new HttpError(400, 'Name can’t be empty.');
-    next.name = name;
+    u.name = name;
   }
-  await put(`users/${u.id}`, next);
-  return { user: publicUser(next) };
+  await saveUser(u);
+  return { user: { id: u.id, name: u.name, email: u.email, notify: u.notify !== false } };
 });
 
-route('GET', '/members', async ({ req }) => {
-  await requireUser(req);
-  const users = await listAll('users/');
-  return { members: users.map((u) => ({ id: u.id, name: u.name, isAdmin: !!u.isAdmin, joined: u.createdAt }))
-    .sort((a, b) => a.name.localeCompare(b.name)) };
+// --- Groups ---
+route('POST', '/groups', async ({ req, body }) => {
+  const u = await requireUser(req);
+  const name = str(body.name, 60);
+  if (!name) throw new HttpError(400, 'Please give your group a name.');
+  const code = checkCode(normCode(body.code));
+  if (u.groups.length >= 25) throw new HttpError(400, 'You’ve reached the limit of 25 groups.');
+  if (await get(`codes/${code}`)) throw new HttpError(409, 'That code is already taken. Try another one.');
+  const group = { id: newId(), name, code, createdBy: u.id, createdAt: now() };
+  await put(`groups/${group.id}`, group);
+  await put(`codes/${code}`, { groupId: group.id });
+  await addMember(u, group.id, 'organizer');
+  return { group: await groupSummary(group.id, u.id) };
 });
 
-route('GET', '/events', async ({ req }) => {
-  await requireUser(req);
-  const [events, names] = await Promise.all([listAll('events/'), nameMap()]);
+route('POST', '/groups/join', async ({ req, body, ctx }) => {
+  const u = await requireUser(req);
+  rateLimit('join:' + u.id, 10, 15 * 60e3);
+  rateLimit('joinip:' + ctx.ip, 30, 15 * 60e3);
+  const code = normCode(body.code);
+  const ref = code ? await get(`codes/${code}`) : null;
+  const group = ref ? await get(`groups/${ref.groupId}`) : null;
+  if (!group) throw new HttpError(404, 'We couldn’t find a group with that code. Check it with your group leader.');
+  if (await get(`g/${group.id}/members/${u.id}`)) return { group: await groupSummary(group.id, u.id), already: true };
+  await addMember(u, group.id, 'member');
+  return { group: await groupSummary(group.id, u.id) };
+});
+
+route('PATCH', '/groups/:gid', async ({ req, body, params }) => {
+  const m = await requireMember(req, params.gid);
+  if (!m.organizer) throw new HttpError(403, 'Only organizers can change group settings.');
+  const g = { ...m.group };
+  if (body.name !== undefined) {
+    const name = str(body.name, 60);
+    if (!name) throw new HttpError(400, 'Please give your group a name.');
+    g.name = name;
+  }
+  if (body.code !== undefined) {
+    const code = checkCode(normCode(body.code));
+    if (code !== g.code) {
+      if (await get(`codes/${code}`)) throw new HttpError(409, 'That code is already taken. Try another one.');
+      await put(`codes/${code}`, { groupId: g.id });
+      await del(`codes/${g.code}`);
+      g.code = code;
+    }
+  }
+  await put(`groups/${g.id}`, g);
+  return { group: await groupSummary(g.id, m.user.id) };
+});
+
+route('POST', '/groups/:gid/leave', async ({ req, params }) => {
+  const m = await requireMember(req, params.gid);
+  if (m.organizer) {
+    const members = await listAll(`g/${m.group.id}/members/`);
+    const otherOrganizers = members.filter((x) => x.role === 'organizer' && x.userId !== m.user.id);
+    if (!otherOrganizers.length && members.length > 1) {
+      throw new HttpError(400, 'You’re the only organizer. Make someone else an organizer before you leave.');
+    }
+  }
+  await del(`g/${m.group.id}/members/${m.user.id}`);
+  m.user.groups = m.user.groups.filter((x) => x !== m.group.id);
+  await saveUser(m.user);
+  return { ok: true };
+});
+
+route('GET', '/groups/:gid/members', async ({ req, params }) => {
+  const m = await requireMember(req, params.gid);
+  const members = await listAll(`g/${m.group.id}/members/`);
+  const users = await Promise.all(members.map((x) => get(`users/${x.userId}`)));
+  return { members: members.map((x, i) => users[i] && ({ id: x.userId, name: users[i].name, role: x.role, joined: x.joinedAt }))
+    .filter(Boolean).sort((a, b) => a.name.localeCompare(b.name)) };
+});
+
+route('PATCH', '/groups/:gid/members/:uid', async ({ req, body, params }) => {
+  const m = await requireMember(req, params.gid);
+  if (!m.organizer) throw new HttpError(403, 'Only organizers can change roles.');
+  const target = await get(`g/${m.group.id}/members/${validId(params.uid)}`);
+  if (!target) throw new HttpError(404, 'Member not found.');
+  if (!['organizer', 'member'].includes(body.role)) throw new HttpError(400, 'Unknown role.');
+  if (body.role === 'member' && target.userId === m.user.id) {
+    const others = (await listAll(`g/${m.group.id}/members/`)).filter((x) => x.role === 'organizer' && x.userId !== m.user.id);
+    if (!others.length) throw new HttpError(400, 'A group needs at least one organizer.');
+  }
+  await put(`g/${m.group.id}/members/${target.userId}`, { ...target, role: body.role });
+  return { ok: true };
+});
+
+route('DELETE', '/groups/:gid/members/:uid', async ({ req, params }) => {
+  const m = await requireMember(req, params.gid);
+  if (!m.organizer) throw new HttpError(403, 'Only organizers can remove members.');
+  const uid = validId(params.uid);
+  if (uid === m.user.id) throw new HttpError(400, 'Use Leave Group to remove yourself.');
+  const target = await get(`g/${m.group.id}/members/${uid}`);
+  if (!target) throw new HttpError(404, 'Member not found.');
+  await del(`g/${m.group.id}/members/${uid}`);
+  const u = await get(`users/${uid}`);
+  if (u) await put(`users/${uid}`, { ...u, groups: (u.groups || []).filter((x) => x !== m.group.id) });
+  return { ok: true };
+});
+
+route('GET', '/groups/:gid/email-log', async ({ req, params }) => {
+  const m = await requireMember(req, params.gid);
+  if (!m.organizer) throw new HttpError(403, 'Organizers only.');
+  const log = (await listAll(`g/${m.group.id}/emaillog/`)).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 50);
+  return { configured: !!RESEND_API_KEY(), log };
+});
+
+// --- Events ---
+route('GET', '/groups/:gid/events', async ({ req, params }) => {
+  const m = await requireMember(req, params.gid);
+  const [events, names] = await Promise.all([listAll(`g/${m.group.id}/events/`), nameMap(m.group.id)]);
   return { events: events.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)).map((e) => eventOut(e, names)) };
 });
 
-route('POST', '/events', async ({ req, body, ctx }) => {
-  const u = await requireUser(req);
-  const ev = { id: newId(), ...readEventBody(body), createdBy: u.id, pollId: null, createdAt: now() };
-  await put(`events/${ev.id}`, ev);
-  await notifyNewEvent(ctx, ev, u.name, false);
-  return { event: eventOut(ev, { [u.id]: u.name }) };
+route('POST', '/groups/:gid/events', async ({ req, body, params, ctx }) => {
+  const m = await requireMember(req, params.gid);
+  const ev = { id: newId(), ...readEventBody(body), createdBy: m.user.id, pollId: null, createdAt: now() };
+  await put(`g/${m.group.id}/events/${ev.id}`, ev);
+  await notifyNewEvent(ctx, m.group, ev, m.user.name, false);
+  return { event: eventOut(ev, { [m.user.id]: m.user.name }) };
 });
 
-route('PUT', '/events/:id', async ({ req, body, params }) => {
-  const u = await requireUser(req);
-  const ev = await get(`events/${validId(params.id)}`);
+route('PUT', '/groups/:gid/events/:id', async ({ req, body, params }) => {
+  const m = await requireMember(req, params.gid);
+  const key = `g/${m.group.id}/events/${validId(params.id)}`;
+  const ev = await get(key);
   if (!ev) throw new HttpError(404, 'Event not found.');
-  if (!canModify(u, ev.createdBy)) throw new HttpError(403, 'Only the person who added this event can edit it.');
+  if (!canModify(m, ev.createdBy)) throw new HttpError(403, 'Only the person who added this event can edit it.');
   const next = { ...ev, ...readEventBody(body), updatedAt: now() };
-  await put(`events/${ev.id}`, next);
-  return { event: eventOut(next, await nameMap()) };
+  await put(key, next);
+  return { event: eventOut(next, await nameMap(m.group.id)) };
 });
 
-route('DELETE', '/events/:id', async ({ req, params }) => {
-  const u = await requireUser(req);
-  const ev = await get(`events/${validId(params.id)}`);
+route('DELETE', '/groups/:gid/events/:id', async ({ req, params }) => {
+  const m = await requireMember(req, params.gid);
+  const key = `g/${m.group.id}/events/${validId(params.id)}`;
+  const ev = await get(key);
   if (!ev) throw new HttpError(404, 'Event not found.');
-  if (!canModify(u, ev.createdBy)) throw new HttpError(403, 'Only the person who added this event can delete it.');
-  await del(`events/${ev.id}`);
+  if (!canModify(m, ev.createdBy)) throw new HttpError(403, 'Only the person who added this event can delete it.');
+  await del(key);
   if (ev.pollId) { // re-open the poll it came from
-    const p = await get(`polls/${ev.pollId}`);
-    if (p) await put(`polls/${p.id}`, { ...p, status: 'open', eventId: null, scheduledOptionId: null });
+    const pk = `g/${m.group.id}/polls/${ev.pollId}`;
+    const p = await get(pk);
+    if (p) await put(pk, { ...p, status: 'open', eventId: null, scheduledOptionId: null });
   }
   return { ok: true };
 });
 
-route('GET', '/polls', async ({ req }) => {
-  await requireUser(req);
-  const [polls, names] = await Promise.all([listAll('polls/'), nameMap()]);
+// --- Polls ---
+route('GET', '/groups/:gid/polls', async ({ req, params }) => {
+  const m = await requireMember(req, params.gid);
+  const [polls, names] = await Promise.all([listAll(`g/${m.group.id}/polls/`), nameMap(m.group.id)]);
   polls.sort((a, b) => (b.status === 'open') - (a.status === 'open') || b.createdAt.localeCompare(a.createdAt));
-  return { polls: await Promise.all(polls.map((p) => pollOut(p, names))) };
+  return { polls: await Promise.all(polls.map((p) => pollOut(m.group.id, p, names))) };
 });
 
-route('POST', '/polls', async ({ req, body, ctx }) => {
-  const u = await requireUser(req);
+route('POST', '/groups/:gid/polls', async ({ req, body, params, ctx }) => {
+  const m = await requireMember(req, params.gid);
   const title = str(body.title, 120);
   if (!title) throw new HttpError(400, 'Please add a title.');
   const seen = new Set(), options = [];
@@ -364,19 +539,19 @@ route('POST', '/polls', async ({ req, body, ctx }) => {
   if (options.length < 2) throw new HttpError(400, 'Add at least two date options for people to vote on.');
   options.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
   const poll = { id: newId(), title, description: str(body.description, 4000), location: str(body.location, 200), cost: parseCost(body.cost),
-    options, status: 'open', eventId: null, scheduledOptionId: null, createdBy: u.id, createdAt: now() };
-  await put(`polls/${poll.id}`, poll);
-  await notifyNewPoll(ctx, poll, u.name);
-  return { poll: await pollOut(poll, { [u.id]: u.name }) };
+    options, status: 'open', eventId: null, scheduledOptionId: null, createdBy: m.user.id, createdAt: now() };
+  await put(`g/${m.group.id}/polls/${poll.id}`, poll);
+  await notifyNewPoll(ctx, m.group, poll, m.user.name);
+  return { poll: await pollOut(m.group.id, poll, { [m.user.id]: m.user.name }) };
 });
 
-route('POST', '/polls/:id/vote', async ({ req, body, params }) => {
-  const u = await requireUser(req);
-  const poll = await get(`polls/${validId(params.id)}`);
+route('POST', '/groups/:gid/polls/:id/vote', async ({ req, body, params }) => {
+  const m = await requireMember(req, params.gid);
+  const poll = await get(`g/${m.group.id}/polls/${validId(params.id)}`);
   if (!poll) throw new HttpError(404, 'Poll not found.');
   if (poll.status !== 'open') throw new HttpError(400, 'This poll is closed — a date has already been picked.');
-  const key = `votes/${poll.id}/${u.id}`;
-  const mine = (await get(key)) || { userId: u.id, answers: {} };
+  const key = `g/${m.group.id}/votes/${poll.id}/${m.user.id}`;
+  const mine = (await get(key)) || { userId: m.user.id, answers: {} };
   const ids = new Set(poll.options.map((o) => o.id));
   for (const [optId, answer] of Object.entries(body?.votes || {})) {
     if (!ids.has(optId)) continue;
@@ -385,47 +560,42 @@ route('POST', '/polls/:id/vote', async ({ req, body, params }) => {
   }
   mine.at = now();
   if (Object.keys(mine.answers).length) await put(key, mine); else await del(key);
-  return { poll: await pollOut(poll, await nameMap()) };
+  return { poll: await pollOut(m.group.id, poll, await nameMap(m.group.id)) };
 });
 
-route('POST', '/polls/:id/schedule', async ({ req, body, params, ctx }) => {
-  const u = await requireUser(req);
-  const poll = await get(`polls/${validId(params.id)}`);
+route('POST', '/groups/:gid/polls/:id/schedule', async ({ req, body, params, ctx }) => {
+  const m = await requireMember(req, params.gid);
+  const pk = `g/${m.group.id}/polls/${validId(params.id)}`;
+  const poll = await get(pk);
   if (!poll) throw new HttpError(404, 'Poll not found.');
-  if (!canModify(u, poll.createdBy)) throw new HttpError(403, 'Only the person who created this poll can pick the final date.');
+  if (!canModify(m, poll.createdBy)) throw new HttpError(403, 'Only the person who created this poll can pick the final date.');
   if (poll.status !== 'open') throw new HttpError(400, 'A date has already been picked for this poll.');
   const opt = poll.options.find((o) => o.id === body.optionId);
   if (!opt) throw new HttpError(400, 'Please choose one of the poll’s dates.');
   const ev = { id: newId(), title: poll.title, description: poll.description, date: opt.date, time: opt.time, cost: poll.cost,
-    location: poll.location, createdBy: u.id, pollId: poll.id, createdAt: now() };
-  await put(`events/${ev.id}`, ev);
+    location: poll.location, createdBy: m.user.id, pollId: poll.id, createdAt: now() };
+  await put(`g/${m.group.id}/events/${ev.id}`, ev);
   const next = { ...poll, status: 'scheduled', eventId: ev.id, scheduledOptionId: opt.id, scheduledAt: now() };
-  await put(`polls/${poll.id}`, next);
-  await notifyNewEvent(ctx, ev, u.name, true);
-  const names = await nameMap();
-  return { poll: await pollOut(next, names), event: eventOut(ev, names) };
+  await put(pk, next);
+  await notifyNewEvent(ctx, m.group, ev, m.user.name, true);
+  const names = await nameMap(m.group.id);
+  return { poll: await pollOut(m.group.id, next, names), event: eventOut(ev, names) };
 });
 
-route('DELETE', '/polls/:id', async ({ req, params }) => {
-  const u = await requireUser(req);
-  const poll = await get(`polls/${validId(params.id)}`);
+route('DELETE', '/groups/:gid/polls/:id', async ({ req, params }) => {
+  const m = await requireMember(req, params.gid);
+  const pk = `g/${m.group.id}/polls/${validId(params.id)}`;
+  const poll = await get(pk);
   if (!poll) throw new HttpError(404, 'Poll not found.');
-  if (!canModify(u, poll.createdBy)) throw new HttpError(403, 'Only the person who created this poll can delete it.');
-  const { blobs } = await store().list({ prefix: `votes/${poll.id}/` });
-  await Promise.all(blobs.map((b) => del(b.key)));
-  await del(`polls/${poll.id}`);
+  if (!canModify(m, poll.createdBy)) throw new HttpError(403, 'Only the person who created this poll can delete it.');
+  await Promise.all((await keys(`g/${m.group.id}/votes/${poll.id}/`)).map((k) => del(k)));
+  await del(pk);
   if (poll.eventId) {
-    const ev = await get(`events/${poll.eventId}`);
-    if (ev) await put(`events/${ev.id}`, { ...ev, pollId: null });
+    const ek = `g/${m.group.id}/events/${poll.eventId}`;
+    const ev = await get(ek);
+    if (ev) await put(ek, { ...ev, pollId: null });
   }
   return { ok: true };
-});
-
-route('GET', '/email-log', async ({ req }) => {
-  const u = await requireUser(req);
-  if (!u.isAdmin) throw new HttpError(403, 'Admins only.');
-  const log = (await listAll('emaillog/')).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 50);
-  return { configured: !!RESEND_API_KEY(), log };
 });
 
 // ---------- Handler ----------
@@ -444,6 +614,7 @@ export default async function handler(req, context = {}) {
     if (req.method !== 'GET' && !(req.headers.get('content-type') || '').includes('application/json')) throw new HttpError(415, 'Expected JSON.');
     const r = routes.find((x) => x.method === req.method && x.re.test(url.pathname));
     if (!r) throw new HttpError(404, 'Not found.');
+    await migrateLegacy();
     let body = {};
     if (req.method !== 'GET') {
       const text = await req.text();

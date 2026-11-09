@@ -1,12 +1,13 @@
 # Small Group Scheduler
 
-A shared calendar and date-polling app for your small group, hosted on Netlify.
+A shared calendar and date-polling app for small groups, hosted on Netlify.
 
-- **Accounts:** members sign up with their name, email and a password. You can require a group code so only invited people can join.
-- **Calendar:** anyone can add an event with a title, description, date, time, location and cost. You can only edit or delete events you added; the organizer can edit or delete any of them. Each event has an "Add to My Calendar" (.ics) button.
+- **Accounts:** people sign up with their name, email and a password.
+- **Groups:** after signing up, each person either **joins a group with its code** or **starts a new group** and picks its code. One person can be in several groups and switch between them with the switcher next to their account icon, which also lets them join or create more. Each group has its own calendar, polls, members and emails.
+- **Organizers:** whoever creates a group is its organizer. Organizers can rename the group, change its code (the old code stops working), make others organizers, and remove members. A group must always have at least one organizer. Any member can see the code, so they can invite people.
+- **Calendar:** any member can add an event with a title, description, date, time, location and cost. You can only edit or delete events you added; organizers can edit or delete any of them. Each event has an "Add to My Calendar" (.ics) button.
 - **Polls:** propose an event with two or more date and time options. Members mark each option Yes, Maybe or No. The poll shows who answered what, when they responded, and who hasn't replied yet. The poll's creator (or the organizer) picks the final date, and it goes on the calendar.
-- **Email:** every member gets an email when an event is added, a poll is created, or a poll date is scheduled. Members can turn this off from their profile. Password reset links also go out by email.
-- **Organizer:** the first person to sign up becomes the organizer.
+- **Email:** every member of a group gets an email, with the group name in the subject, when an event is added, a poll is created, or a poll date is scheduled. Members can turn emails off from their profile. Password reset links also go out by email.
 
 No build step and no framework. The front end is plain HTML, CSS and JS in `public/`. The back end is one Netlify Function, `netlify/functions/api.mjs`, that stores data in **Netlify Blobs**, which is built into Netlify and needs no setup.
 
@@ -32,7 +33,6 @@ Go to **Site configuration → Environment variables** and add:
 | Variable | Required | Example | What it does |
 |---|---|---|---|
 | `APP_NAME` | recommended | `Foster Small Group` | The name shown in the app and in emails |
-| `GROUP_CODE` | recommended | `grace2026` | The code people must enter to sign up. Leave it blank to let anyone with the link join |
 | `RESEND_API_KEY` | for email | `re_xxxxxxxx` | Your Resend API key (see below) |
 | `EMAIL_FROM` | for email | `Small Group <group@yourdomain.com>` | The sender. It must use a domain you've verified in Resend |
 | `APP_URL` | optional | `https://oursmallgroup.netlify.app` | The link used in emails. Netlify fills this in automatically; set it only if you use a custom domain |
@@ -50,12 +50,13 @@ Until a domain is verified, Resend only delivers to your own Resend account emai
 To check email status, sign in as the organizer and tap your avatar. **Email delivery** shows *Connected*, *Not set up*, or *Last send failed*. Netlify's function logs show the error details.
 
 ### 5. Invite your group
-Sign up first so you become the organizer. Then send everyone the link and the group code.
+Sign up, choose **Start a Group**, and pick a code. Then open **Members** (or **Group Info & Invite** in the group switcher) and tap **Copy Invite** to get a message with the link and code to send.
 
 ---
 
 ## Notes
 - **Free Netlify plan:** fine for a small group. Every page load makes a few quick function calls.
+- **Upgrading from the single-group version:** on first launch, existing members, events and polls move automatically into one group named after `APP_NAME`, with a generated code. The old organizer becomes its organizer, and can see and change the code under Group Info.
 - **Data:** stored in the site's Netlify Blobs store, named `smallgroup`. You can browse it under **Netlify → your site → Blobs**, or with `netlify blobs:list smallgroup`. It persists across deploys.
 - **Security:** passwords are hashed with scrypt, sessions use HttpOnly cookies that last 60 days, and everything is served over HTTPS on Netlify.
 - **Time zones:** dates and times are stored as entered ("7:00 PM on Nov 20"). They aren't converted between time zones, which is what a local group usually wants.

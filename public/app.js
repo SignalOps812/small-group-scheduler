@@ -4,8 +4,8 @@
 
   // ---------- State ----------
   const S = {
-    config: { appName: 'Small Group', requireCode: false },
-    me: null, events: [], polls: [], members: [],
+    config: { appName: 'Small Group' },
+    me: null, groups: [], gid: null, events: [], polls: [], members: [],
     view: 'calendar', month: null, selected: null,
     authMode: 'signin', resetToken: null,
     sheet: null, // { kind, id }
@@ -44,7 +44,14 @@
   const PALETTE = ['blue', 'purple', 'orange', 'teal', 'pink', 'indigo', 'green', 'brown'];
   const colorFor = (id) => { let h = 0; for (const ch of String(id)) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return `var(--${PALETTE[h % PALETTE.length]})`; };
   const avatar = (id, name, cls = '') => `<span class="avatar ${cls}" style="--c:${colorFor(id)}" title="${esc(name)}" aria-hidden="true">${esc(initials(name))}</span>`;
-  const canModify = (ownerId) => S.me && (S.me.isAdmin || S.me.id === ownerId);
+  const curGroup = () => S.groups.find((g) => g.id === S.gid) || null;
+  const isOrganizer = () => curGroup()?.role === 'organizer';
+  const canModify = (ownerId) => S.me && (isOrganizer() || S.me.id === ownerId);
+  const gp = (path = '') => `/groups/${encodeURIComponent(S.gid)}${path}`;
+  const store = {
+    get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+    set(k, v) { try { localStorage.setItem(k, v); } catch {} },
+  };
 
   const I = {
     plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
@@ -56,6 +63,9 @@
     check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
     q: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9.2 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4.5"/><circle cx="12" cy="18.5" r=".6" fill="currentColor"/></svg>',
     x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M7 7l10 10M17 7L7 17"/></svg>',
+    more: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="6" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="18" cy="12" r="1.8"/></svg>',
+    info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="7.8" r=".6" fill="currentColor"/></svg>',
+    key: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3M14 9l2 2"/></svg>',
     minus: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10" fill="var(--red)"/><path d="M7.5 12h9" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></svg>',
   };
 
@@ -81,7 +91,10 @@
 
   // ---------- Data ----------
   async function loadAll() {
-    const [e, p, m] = await Promise.all([api('GET', '/events'), api('GET', '/polls'), api('GET', '/members')]);
+    if (!S.gid) return;
+    const gid = S.gid;
+    const [e, p, m] = await Promise.all([api('GET', gp('/events')), api('GET', gp('/polls')), api('GET', gp('/members'))]);
+    if (gid !== S.gid) return; // switched groups mid-load
     S.events = e.events; S.polls = p.polls; S.members = m.members; S.loaded = true;
   }
   const eventsOn = (d) => S.events.filter((e) => e.date === d);
@@ -111,7 +124,6 @@
     if (m === 'signup') fields += `<div class="row"><label for="f-name">Name</label><input id="f-name" name="name" autocomplete="name" placeholder="First and last name" required></div>`;
     if (m !== 'reset') fields += `<div class="row"><label for="f-email">Email</label><input id="f-email" name="email" type="email" autocomplete="email" placeholder="you@example.com" required></div>`;
     if (m !== 'forgot') fields += `<div class="row"><label for="f-pw">Password</label><input id="f-pw" name="password" type="password" minlength="8" autocomplete="${m === 'signin' ? 'current-password' : 'new-password'}" placeholder="${m === 'signin' ? 'Required' : 'At least 8 characters'}" required></div>`;
-    if (m === 'signup' && S.config.requireCode) fields += `<div class="row"><label for="f-code">Group code</label><input id="f-code" name="code" autocomplete="off" placeholder="From your group leader" required></div>`;
     const btn = { signin: 'Sign In', signup: 'Create Account', forgot: 'Send Reset Link', reset: 'Save Password' }[m];
     const seg = (m === 'signin' || m === 'signup') ? `
       <div class="segmented" role="tablist" data-seg>
@@ -163,13 +175,15 @@
         S.resetToken = null; history.replaceState(null, '', '#calendar');
       }
       await boot();
-      if (S.authMode === 'signup') toast(`Welcome to ${S.config.appName}!`);
+      if (S.authMode === 'signup') toast('Account created');
     } catch (ex) { err(ex.message); btn.disabled = false; }
   }
 
   // ---------- Render: shell ----------
   function render() {
     if (!S.me) { closeSheet(true); return renderAuth(); }
+    if (!S.groups.length) return renderOnboarding();
+    const g = curGroup();
     const pend = pendingPolls().length;
     const tabs = [['calendar', 'Calendar', I.cal], ['polls', 'Polls', I.poll], ['members', 'Members', I.people]];
     const idx = tabs.findIndex((t) => t[0] === S.view);
@@ -186,6 +200,11 @@
           ${tabs.map(([k, label]) => `<button role="tab" aria-selected="${S.view === k}" data-action="nav" data-view="${k}">${label}${k === 'polls' && pend ? `<span class="badge">${pend}</span>` : ''}</button>`).join('')}
         </div>
         <div class="right">
+          <button class="group-switch" data-action="group-menu" aria-haspopup="menu" aria-label="Current group: ${esc(g.name)}. Switch groups">
+            <span class="gs-dot" style="--c:${colorFor(g.id)}">${esc(initials(g.name))}</span>
+            <span class="gs-name">${esc(g.name)}</span>
+            <svg class="gs-chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 10l5 5 5-5"/></svg>
+          </button>
           <button class="avatar-btn" data-action="profile" aria-label="Your profile">${avatar(S.me.id, S.me.name, 'avatar')}</button>
         </div>
       </header>
@@ -305,12 +324,164 @@
 
   // ---------- Members ----------
   function renderMembers() {
+    const g = curGroup(), org = isOrganizer();
+    const joined = (iso) => new Date(iso.includes('T') ? iso : iso.replace(' ', 'T') + 'Z').toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
     return `
-      <div class="title-row"><div><h1 class="large-title">Members</h1><div class="sub">${S.members.length} ${S.members.length === 1 ? 'person' : 'people'} in ${esc(S.config.appName)}</div></div></div>
-      <div class="group people" style="max-width:640px">
-        ${S.members.map((m) => `<div class="person">${avatar(m.id, m.name)}<div class="nm">${esc(m.name)}${m.id === S.me.id ? ' <span class="muted">(you)</span>' : ''}<small>Joined ${esc(new Date(m.joined.includes('T') ? m.joined : m.joined.replace(' ', 'T') + 'Z').toLocaleDateString(undefined, { month: 'long', year: 'numeric' }))}</small></div>${m.isAdmin ? '<span class="pill blue">Organizer</span>' : ''}</div>`).join('')}
+      <div class="title-row"><div><h1 class="large-title">Members</h1><div class="sub">${S.members.length} ${S.members.length === 1 ? 'person' : 'people'} in ${esc(g.name)}</div></div></div>
+      <div style="max-width:640px">
+        <div class="invite card">
+          <div class="invite-text">
+            <div class="invite-label">Invite people</div>
+            <div class="small muted">Share this code. New members enter it after they sign up.</div>
+          </div>
+          <div class="invite-code">
+            <code>${esc(g.code)}</code>
+            <button class="btn sm tinted" data-action="copy-invite">Copy Invite</button>
+          </div>
+        </div>
+        <div class="group people" style="margin-top:22px">
+          ${S.members.map((m) => `<div class="person">${avatar(m.id, m.name)}<div class="nm">${esc(m.name)}${m.id === S.me.id ? ' <span class="muted">(you)</span>' : ''}<small>Joined ${esc(joined(m.joined))}</small></div>${m.role === 'organizer' ? '<span class="pill blue">Organizer</span>' : ''}${org && m.id !== S.me.id ? `<button class="icon-btn" data-action="member-actions" data-id="${esc(m.id)}" aria-label="Manage ${esc(m.name)}">${I.more}</button>` : ''}</div>`).join('')}
+        </div>
+        <p class="group-foot">Everyone here gets an email when a new event or poll is added, unless they turn it off in their profile.${org ? ' As an organizer, tap ••• next to someone to make them an organizer or remove them.' : ''}</p>
+      </div>`;
+  }
+
+  // ---------- Onboarding (no groups yet) ----------
+  function renderOnboarding() {
+    closeSheet(true);
+    const mode = S.onboard || 'join';
+    $app.innerHTML = `
+      <main class="auth-wrap">
+        <div class="auth-card">
+          <div class="app-icon"><img src="/icon.svg" alt=""></div>
+          <h1>Hi, ${esc(S.me.name.split(' ')[0])}</h1>
+          <p class="sub">Join your group with the code your leader shared, or start a new group of your own.</p>
+          <div class="segmented" role="tablist">
+            <span class="thumb" style="width:calc(50% - 2px);transform:translateX(${mode === 'create' ? '100%' : '0'})"></span>
+            <button type="button" role="tab" aria-selected="${mode === 'join'}" data-action="onboard-mode" data-mode="join">Join a Group</button>
+            <button type="button" role="tab" aria-selected="${mode === 'create'}" data-action="onboard-mode" data-mode="create">Start a Group</button>
+          </div>
+          <form id="onboard-form" novalidate autocomplete="off">
+            ${groupFields(mode)}
+            <div id="sheet-msg"></div>
+            <button class="btn block" type="submit">${mode === 'create' ? 'Create Group' : 'Join Group'}</button>
+          </form>
+          <div class="auth-foot"><button type="button" class="link" data-action="logout">Sign out</button></div>
+        </div>
+      </main>`;
+    const f = $app.querySelector('#onboard-form');
+    f.addEventListener('submit', (e) => { e.preventDefault(); submitGroupForm(f, mode); });
+    wireCodeSuggest(f);
+    const first = f.querySelector('input');
+    if (first && matchMedia('(min-width: 761px)').matches) first.focus();
+  }
+  function groupFields(mode, g) {
+    if (mode === 'join') return `
+      <div class="group"><div class="row"><label for="g-code">Code</label><input id="g-code" name="code" placeholder="e.g. grace-group" autocapitalize="none" spellcheck="false" required></div></div>
+      <p class="group-foot" style="text-align:left">Ask your group leader for the code.</p>`;
+    return `
+      <div class="group">
+        <div class="row"><label for="g-name">Name</label><input id="g-name" name="name" maxlength="60" placeholder="e.g. Tuesday Night Group" value="${esc(g?.name || '')}" required></div>
+        <div class="row"><label for="g-code">Code</label><input id="g-code" name="code" maxlength="24" placeholder="Pick an invite code" autocapitalize="none" spellcheck="false" value="${esc(g?.code || '')}" required></div>
       </div>
-      <p class="group-foot" style="max-width:640px">Everyone here gets an email when a new event or poll is added, unless they turn it off in their profile.</p>`;
+      <p class="group-foot" style="text-align:left">${g ? 'Changing the code means the old one stops working. People already in the group stay in.' : 'You’ll be the organizer. Share the code with people you want to invite. It can be 4–24 letters, numbers or dashes.'}</p>`;
+  }
+  function suggestCode(name) {
+    const slug = name.toLowerCase().normalize('NFKD').replace(/['’]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 18).replace(/-+$/, '');
+    return (slug.length >= 2 ? slug : 'group') + '-' + Math.floor(10 + Math.random() * 90);
+  }
+  function wireCodeSuggest(root) {
+    const name = root.querySelector('#g-name'), code = root.querySelector('#g-code');
+    if (!name || !code || code.value) return;
+    let touched = false;
+    code.addEventListener('input', () => { touched = true; });
+    name.addEventListener('input', () => { if (!touched) code.value = name.value.trim() ? suggestCode(name.value) : ''; });
+  }
+  async function submitGroupForm(form, mode, editing) {
+    const v = Object.fromEntries(new FormData(form));
+    const msg = form.querySelector('#sheet-msg'), btn = form.querySelector('button[type=submit]');
+    const err = (t) => { msg.innerHTML = `<div class="form-error">${esc(t)}</div>`; };
+    msg.innerHTML = '';
+    const code = (v.code || '').trim().toLowerCase().replace(/\s+/g, '-');
+    if (mode !== 'join' && !(v.name || '').trim()) return err('Please give your group a name.');
+    if (!code) return err('Please enter a code.');
+    if (mode !== 'join' && !/^[a-z0-9][a-z0-9-]{2,22}[a-z0-9]$/.test(code)) return err('Codes are 4–24 characters: letters, numbers and dashes.');
+    btn.disabled = true;
+    try {
+      let r;
+      if (editing) r = await api('PATCH', `/groups/${encodeURIComponent(editing)}`, { name: v.name, code });
+      else if (mode === 'join') r = await api('POST', '/groups/join', { code });
+      else r = await api('POST', '/groups', { name: v.name, code });
+      await refreshGroups();
+      if (editing) { closeSheet(); render(); return toast('Group updated'); }
+      await switchGroup(r.group.id);
+      toast(r.already ? `You're already in ${r.group.name}` : mode === 'join' ? `Welcome to ${r.group.name}!` : `${r.group.name} is ready. Invite people with code ${r.group.code}`);
+    } catch (ex) { err(ex.message); btn.disabled = false; }
+  }
+  async function refreshGroups() {
+    const me = await api('GET', '/me');
+    S.me = me.user; S.groups = me.groups || [];
+    if (S.gid && !S.groups.some((g) => g.id === S.gid)) S.gid = null;
+    if (!S.gid && S.groups.length) S.gid = S.groups[0].id;
+  }
+  async function switchGroup(gid) {
+    closeMenu(); closeSheet(true);
+    S.gid = gid; store.set('sg_group', gid);
+    S.loaded = false; S.events = []; S.polls = []; S.members = [];
+    render();
+    await loadAll();
+    render();
+  }
+  function inviteText() {
+    const g = curGroup();
+    return `Join ${g.name} on ${S.config.appName}! Sign up at ${location.origin} and enter the group code: ${g.code}`;
+  }
+  async function copyText(t) {
+    try { await navigator.clipboard.writeText(t); return true; }
+    catch {
+      const ta = document.createElement('textarea'); ta.value = t; ta.style.position = 'fixed'; ta.style.opacity = '0';
+      document.body.appendChild(ta); ta.select();
+      let ok = false; try { ok = document.execCommand('copy'); } catch {}
+      ta.remove(); return ok;
+    }
+  }
+
+  // ---------- Group menu (pull-down) ----------
+  function openMenu() {
+    const btn = document.querySelector('.group-switch');
+    if (!btn) return;
+    closeMenu();
+    const r = btn.getBoundingClientRect();
+    const menu = document.createElement('div');
+    menu.id = 'group-menu';
+    menu.className = 'menu';
+    menu.setAttribute('role', 'menu');
+    menu.innerHTML = `
+      <div class="menu-label">Your Groups</div>
+      ${S.groups.map((g) => `<button role="menuitemradio" aria-checked="${g.id === S.gid}" class="menu-item" data-action="switch-group" data-id="${esc(g.id)}">
+        <span class="check">${g.id === S.gid ? I.check : ''}</span>
+        <span class="gs-dot" style="--c:${colorFor(g.id)}">${esc(initials(g.name))}</span>
+        <span class="mi-text"><b>${esc(g.name)}</b><small>${g.memberCount} member${g.memberCount === 1 ? '' : 's'}${g.role === 'organizer' ? ' · Organizer' : ''}</small></span>
+      </button>`).join('')}
+      <div class="menu-sep"></div>
+      <button role="menuitem" class="menu-item" data-action="group-info"><span class="check"></span><span class="mi-icon">${I.info}</span><span class="mi-text">Group Info &amp; Invite</span></button>
+      <div class="menu-sep"></div>
+      <button role="menuitem" class="menu-item" data-action="join-group"><span class="check"></span><span class="mi-icon">${I.key}</span><span class="mi-text">Join a Group…</span></button>
+      <button role="menuitem" class="menu-item" data-action="new-group"><span class="check"></span><span class="mi-icon">${I.plus}</span><span class="mi-text">Create a Group…</span></button>`;
+    document.body.appendChild(menu);
+    const w = menu.offsetWidth;
+    menu.style.top = `${r.bottom + 8}px`;
+    menu.style.left = `${Math.max(12, Math.min(window.innerWidth - w - 12, r.right - w))}px`;
+    btn.setAttribute('aria-expanded', 'true');
+    setTimeout(() => document.addEventListener('pointerdown', menuOutside, true), 0);
+    menu.querySelector('.menu-item')?.focus({ preventScroll: true });
+  }
+  function menuOutside(e) { if (!e.target.closest('#group-menu, .group-switch')) closeMenu(); }
+  function closeMenu() {
+    document.removeEventListener('pointerdown', menuOutside, true);
+    const m = document.getElementById('group-menu');
+    if (m) m.remove();
+    document.querySelector('.group-switch')?.setAttribute('aria-expanded', 'false');
   }
 
   // ---------- Sheets ----------
@@ -323,10 +494,11 @@
     if (first && matchMedia('(min-width: 761px)').matches) setTimeout(() => first.focus(), 60);
     const form = $sheetRoot.querySelector('form');
     if (form) form.addEventListener('submit', (e) => { e.preventDefault(); onSheetSave(); });
+    if (form && kind === 'group-new') wireCodeSuggest(form);
   }
   function refreshSheet() {
     const sheet = $sheetRoot.querySelector('.sheet');
-    if (!sheet || !S.sheet || S.sheet.kind === 'event-form' || S.sheet.kind === 'poll-form') return;
+    if (!sheet || !S.sheet || ['event-form', 'poll-form', 'group-new', 'group-join', 'group-edit', 'profile'].includes(S.sheet.kind)) return;
     const body = sheet.querySelector('.sheet-body'), top = body ? body.scrollTop : 0;
     const html = sheetHtml();
     if (!html) return closeSheet();
@@ -469,6 +641,54 @@
           ${owner ? `<div class="actions"><button class="btn danger block" data-action="delete-poll" data-id="${esc(p.id)}">Delete Poll</button></div>` : ''}
         </div>`;
     }
+    if (s.kind === 'group-new' || s.kind === 'group-join' || s.kind === 'group-edit') {
+      const mode = s.kind === 'group-join' ? 'join' : 'create';
+      const g = s.kind === 'group-edit' ? curGroup() : null;
+      const title = s.kind === 'group-join' ? 'Join a Group' : g ? 'Edit Group' : 'New Group';
+      return `<form autocomplete="off" novalidate>${head(title, 'Cancel', s.kind === 'group-join' ? 'Join' : g ? 'Save' : 'Create')}
+        <div class="sheet-body">${groupFields(mode, g)}<div id="sheet-msg"></div></div></form>`;
+    }
+    if (s.kind === 'group-info') {
+      const g = curGroup();
+      if (!g) return '';
+      const org = g.role === 'organizer';
+      return `${head('Group Info', 'Done')}
+        <div class="sheet-body">
+          <div class="detail-hero">
+            <span class="gs-dot xl" style="--c:${colorFor(g.id)}">${esc(initials(g.name))}</span>
+            <h2 style="margin-top:12px">${esc(g.name)}</h2>
+            <div class="w">${g.memberCount} member${g.memberCount === 1 ? '' : 's'} · You're ${org ? 'an organizer' : 'a member'}</div>
+          </div>
+          <div class="group-label">Invite</div>
+          <div class="group kv">
+            <div class="row"><span>Group code</span><span class="v"><code class="code-inline">${esc(g.code)}</code></span></div>
+            <div class="row button-row" data-action="copy-code" role="button" tabindex="0">Copy Code</div>
+            <div class="row button-row" data-action="copy-invite" role="button" tabindex="0">Copy Invite Message</div>
+          </div>
+          <p class="group-foot">New members sign up, then enter this code to join.</p>
+          ${org ? `<div class="group-label" style="margin-top:22px">Organizer</div>
+          <div class="group kv">
+            <div class="row button-row" data-action="edit-group" role="button" tabindex="0">Edit Name &amp; Code<span class="chev">${I.right.replace('<svg', '<svg width="14" height="14"')}</span></div>
+            <div class="row"><span>Email delivery</span><span class="v" id="email-status">Checking…</span></div>
+          </div>` : ''}
+          <div class="group" style="margin-top:22px"><div class="row danger-row" data-action="leave-group" role="button" tabindex="0">Leave Group</div></div>
+        </div>`;
+    }
+    if (s.kind === 'member') {
+      const m = S.members.find((x) => x.id === s.id);
+      if (!m) return '';
+      return `${head('Member', 'Done')}
+        <div class="sheet-body">
+          <div class="detail-hero">${avatar(m.id, m.name, 'lg')}<h2 style="margin-top:12px">${esc(m.name)}</h2><div class="w">${m.role === 'organizer' ? 'Organizer' : 'Member'} of ${esc(curGroup().name)}</div></div>
+          <div class="group">
+            ${m.role === 'organizer'
+              ? `<div class="row button-row" data-action="set-role" data-id="${esc(m.id)}" data-role="member" role="button" tabindex="0">Remove Organizer Role</div>`
+              : `<div class="row button-row" data-action="set-role" data-id="${esc(m.id)}" data-role="organizer" role="button" tabindex="0">Make Organizer</div>`}
+          </div>
+          <p class="group-foot">Organizers can edit or delete any event or poll, change the group code, and manage members.</p>
+          <div class="group" style="margin-top:22px"><div class="row danger-row" data-action="remove-member" data-id="${esc(m.id)}" role="button" tabindex="0">Remove from Group</div></div>
+        </div>`;
+    }
     if (s.kind === 'profile') {
       const m = S.me;
       return `<form autocomplete="off">${head('Profile', 'Done', 'Save')}
@@ -481,8 +701,6 @@
           <div class="group">
             <div class="row"><span>Email me about new events and polls</span><label class="switch"><input type="checkbox" name="notify" data-action="toggle-notify" ${m.notify ? 'checked' : ''}><span></span></label></div>
           </div>
-          ${m.isAdmin ? `<div class="group-label" style="margin-top:22px">Organizer</div><div class="group kv"><div class="row"><span>Email delivery</span><span class="v" id="email-status">Checking…</span></div></div>
-            <p class="group-foot">You're the organizer because you created the first account. You can edit or delete any event or poll.</p>` : ''}
           <div class="group" style="margin-top:22px"><div class="row danger-row" data-action="logout" role="button" tabindex="0">Sign Out</div></div>
           <div id="sheet-msg"></div>
         </div></form>`;
@@ -494,6 +712,9 @@
     const s = S.sheet, form = $sheetRoot.querySelector('form');
     if (!form) return;
     const btn = form.querySelector('button[type=submit]'), msg = form.querySelector('#sheet-msg');
+    if (['group-new', 'group-join', 'group-edit'].includes(s.kind)) {
+      return submitGroupForm(form, s.kind === 'group-join' ? 'join' : 'create', s.kind === 'group-edit' ? S.gid : null);
+    }
     const v = Object.fromEntries(new FormData(form));
     const err = (t) => { msg.innerHTML = `<div class="form-error">${esc(t)}</div>`; msg.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); };
     msg.innerHTML = '';
@@ -503,7 +724,7 @@
         if (!v.title.trim()) { btn.disabled = false; return err('Please add a title.'); }
         if (!v.date) { btn.disabled = false; return err('Please choose a date.'); }
         const body = { title: v.title, location: v.location, date: v.date, time: v.time, cost: v.cost, description: v.description };
-        const r = s.id ? await api('PUT', `/events/${s.id}`, body) : await api('POST', '/events', body);
+        const r = s.id ? await api('PUT', gp(`/events/${s.id}`), body) : await api('POST', gp('/events'), body);
         await loadAll();
         S.selected = r.event.date; const d = parseYmd(r.event.date); S.month = new Date(d.getFullYear(), d.getMonth(), 1);
         S.view = 'calendar'; history.replaceState(null, '', '#calendar');
@@ -514,7 +735,7 @@
         if (!v.title.trim()) { btn.disabled = false; return err('Please add a title.'); }
         const options = s.options.filter((o) => o.date);
         if (options.length < 2) { btn.disabled = false; return err('Add at least two dates for people to vote on.'); }
-        const r = await api('POST', '/polls', { title: v.title, location: v.location, cost: v.cost, description: v.description, options });
+        const r = await api('POST', gp('/polls'), { title: v.title, location: v.location, cost: v.cost, description: v.description, options });
         await loadAll();
         S.view = 'polls'; render();
         openSheet('poll', { id: r.poll.id }); history.replaceState(null, '', '#polls/' + r.poll.id);
@@ -584,7 +805,7 @@
     'delete-event': async (el) => {
       const e = S.events.find((x) => x.id === el.dataset.id);
       if (!confirm(`Delete "${e.title}"?${e.pollId ? ' Its poll will reopen for voting.' : ''}`)) return;
-      try { await api('DELETE', `/events/${e.id}`); await loadAll(); closeSheet(); render(); toast('Event deleted'); } catch (ex) { toast(ex.message); }
+      try { await api('DELETE', gp(`/events/${e.id}`)); await loadAll(); closeSheet(); render(); toast('Event deleted'); } catch (ex) { toast(ex.message); }
     },
     ics: (el) => downloadIcs(S.events.find((x) => x.id === el.dataset.id)),
     'new-poll': () => openSheet('poll-form'),
@@ -611,7 +832,7 @@
       if (!p.responders.some((r) => r.userId === S.me.id) && next) p.responders.push({ userId: S.me.id, name: S.me.name, at: new Date().toISOString() });
       refreshSheet();
       try {
-        const r = await api('POST', `/polls/${p.id}/vote`, { votes: { [o.id]: next } });
+        const r = await api('POST', gp(`/polls/${p.id}/vote`), { votes: { [o.id]: next } });
         Object.assign(p, r.poll); refreshSheet();
         const had = document.querySelector('.badge'); render(); if (had && !pendingPolls().length) toast('Thanks — your response is saved');
       } catch (ex) { toast(ex.message); await loadAll(); refreshSheet(); render(); }
@@ -621,37 +842,68 @@
       const o = p.options.find((x) => x.id === el.dataset.opt);
       if (!confirm(`Schedule "${p.title}" for ${fmtLong(o.date)}${o.time ? ' at ' + fmtTime(o.time) : ''}?\n\nIt will go on the calendar, voting will close, and everyone will get an email.`)) return;
       try {
-        await api('POST', `/polls/${p.id}/schedule`, { optionId: o.id });
+        await api('POST', gp(`/polls/${p.id}/schedule`), { optionId: o.id });
         await loadAll(); refreshSheet(); render(); toast('Scheduled · Added to the calendar');
       } catch (ex) { toast(ex.message); }
     },
     'delete-poll': async (el) => {
       const p = S.polls.find((x) => x.id === el.dataset.id);
       if (!confirm(`Delete the poll "${p.title}" and all its responses?${p.eventId ? ' The calendar event will stay.' : ''}`)) return;
-      try { await api('DELETE', `/polls/${p.id}`); await loadAll(); closeSheet(); render(); toast('Poll deleted'); } catch (ex) { toast(ex.message); }
+      try { await api('DELETE', gp(`/polls/${p.id}`)); await loadAll(); closeSheet(); render(); toast('Poll deleted'); } catch (ex) { toast(ex.message); }
     },
     'goto-date': (el) => {
       S.selected = el.dataset.date; const d = parseYmd(S.selected); S.month = new Date(d.getFullYear(), d.getMonth(), 1);
       closeSheet(); go('calendar');
     },
-    profile: async () => {
-      openSheet('profile');
-      if (S.me.isAdmin) {
-        try {
-          const r = await api('GET', '/email-log');
-          const last = r.log[0];
-          const el = document.getElementById('email-status');
-          if (el) el.textContent = !r.configured ? 'Not set up' : last && last.status === 'failed' ? 'Last send failed' : 'Connected';
-        } catch {}
-      }
-    },
+    profile: () => { closeMenu(); openSheet('profile'); },
     'toggle-notify': async (el) => {
       try { const r = await api('PATCH', '/me', { notify: el.checked }); S.me = r.user; toast(el.checked ? 'Email notifications on' : 'Email notifications off'); }
       catch (ex) { el.checked = !el.checked; toast(ex.message); }
     },
     logout: async () => {
       try { await api('POST', '/logout', {}); } catch {}
-      S.me = null; S.loaded = false; S.authMode = 'signin'; closeSheet(true); history.replaceState(null, '', '#'); render();
+      S.me = null; S.groups = []; S.gid = null; S.loaded = false; S.authMode = 'signin'; closeMenu(); closeSheet(true); history.replaceState(null, '', '#'); render();
+    },
+    'onboard-mode': (el) => { S.onboard = el.dataset.mode; renderOnboarding(); },
+    'group-menu': () => (document.getElementById('group-menu') ? closeMenu() : openMenu()),
+    'switch-group': (el) => { if (el.dataset.id === S.gid) return closeMenu(); switchGroup(el.dataset.id).then(() => toast(`Switched to ${curGroup().name}`)); },
+    'new-group': () => { closeMenu(); openSheet('group-new'); },
+    'join-group': () => { closeMenu(); openSheet('group-join'); },
+    'group-info': async () => {
+      closeMenu(); openSheet('group-info');
+      if (isOrganizer()) {
+        try {
+          const r = await api('GET', gp('/email-log'));
+          const last = r.log[0], el = document.getElementById('email-status');
+          if (el) el.textContent = !r.configured ? 'Not set up' : last && last.status === 'failed' ? 'Last send failed' : 'Connected';
+        } catch {}
+      }
+    },
+    'edit-group': () => openSheet('group-edit'),
+    'copy-code': async () => toast((await copyText(curGroup().code)) ? 'Code copied' : 'Couldn’t copy — the code is ' + curGroup().code),
+    'copy-invite': async () => toast((await copyText(inviteText())) ? 'Invite copied — paste it in a text or email' : 'Couldn’t copy. The code is ' + curGroup().code),
+    'leave-group': async () => {
+      const g = curGroup();
+      if (!confirm(`Leave ${g.name}? You'll stop seeing its calendar and getting its emails. You can rejoin with the code.`)) return;
+      try {
+        await api('POST', gp('/leave'), {});
+        S.gid = null; await refreshGroups(); closeSheet(true);
+        if (S.gid) await switchGroup(S.gid); else render();
+        toast(`You left ${g.name}`);
+      } catch (ex) { toast(ex.message); }
+    },
+    'member-actions': (el) => openSheet('member', { id: el.dataset.id }),
+    'set-role': async (el) => {
+      try {
+        await api('PATCH', gp(`/members/${encodeURIComponent(el.dataset.id)}`), { role: el.dataset.role });
+        await loadAll(); refreshSheet(); render(); toast(el.dataset.role === 'organizer' ? 'Now an organizer' : 'Organizer role removed');
+      } catch (ex) { toast(ex.message); }
+    },
+    'remove-member': async (el) => {
+      const m = S.members.find((x) => x.id === el.dataset.id);
+      if (!confirm(`Remove ${m.name} from ${curGroup().name}? They can rejoin only with the current code.`)) return;
+      try { await api('DELETE', gp(`/members/${encodeURIComponent(m.id)}`)); await refreshGroups(); await loadAll(); closeSheet(); render(); toast(`${m.name} removed`); }
+      catch (ex) { toast(ex.message); }
     },
     close: () => closeSheet(),
     backdrop: (el, ev) => { if (ev.target === el) closeSheet(); },
@@ -668,7 +920,7 @@
     if (el.dataset?.action === 'toggle-notify') actions['toggle-notify'](el);
   });
   document.addEventListener('keydown', (ev) => {
-    if (ev.key === 'Escape' && S.sheet) closeSheet();
+    if (ev.key === 'Escape') { if (document.getElementById('group-menu')) closeMenu(); else if (S.sheet) closeSheet(); }
     if ((ev.key === 'Enter' || ev.key === ' ') && ev.target.matches('[role=button][data-action]')) { ev.preventDefault(); ev.target.click(); }
   });
   window.addEventListener('hashchange', () => {
@@ -681,8 +933,9 @@
   // Keep things fresh while the tab is open
   async function refresh() {
     if (!S.me || document.hidden) return;
-    if (S.sheet && ['event-form', 'poll-form', 'profile'].includes(S.sheet.kind)) return;
-    try { await loadAll(); render(); if (S.sheet) refreshSheet(); } catch {}
+    if (S.sheet && ['event-form', 'poll-form', 'profile', 'group-new', 'group-join', 'group-edit'].includes(S.sheet.kind)) return;
+    if (document.getElementById('group-menu')) return;
+    try { await refreshGroups(); if (S.groups.length) await loadAll(); render(); if (S.sheet) refreshSheet(); } catch {}
   }
   setInterval(refresh, 30000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
@@ -693,15 +946,21 @@
     S.month = S.month || new Date(t.getFullYear(), t.getMonth(), 1);
     S.selected = S.selected || todayStr();
     const me = await api('GET', '/me');
-    S.me = me.user;
+    S.me = me.user; S.groups = me.groups || [];
     if (!S.me) return render();
     if (S.authMode === 'reset') { S.authMode = 'signin'; history.replaceState(null, '', '#calendar'); }
+    const wanted = [S.linkGroup, store.get('sg_group')].find((id) => id && S.groups.some((g) => g.id === id));
+    S.gid = wanted || S.groups[0]?.id || null;
+    if (S.gid) store.set('sg_group', S.gid);
+    if (S.linkGroup) { history.replaceState(null, '', location.pathname + location.hash); S.linkGroup = null; }
+    if (!S.gid) return render(); // onboarding
     render(); // shell with spinner
     await loadAll();
     render();
     if (S.pendingPoll) { const id = S.pendingPoll; S.pendingPoll = null; if (S.polls.some((p) => p.id === id)) openSheet('poll', { id }); }
   }
   (async () => {
+    S.linkGroup = new URLSearchParams(location.search).get('g');
     readHash();
     try { S.config = await api('GET', '/config'); document.title = S.config.appName; } catch {}
     if (S.authMode === 'reset') { S.me = null; return renderAuth(); }
