@@ -256,6 +256,7 @@
         <div><h1 class="large-title">Calendar</h1><div class="sub">${upcoming.length ? `${upcoming.length}${upcoming.length === 12 ? '+' : ''} upcoming event${upcoming.length > 1 ? 's' : ''}` : 'Nothing scheduled yet'}</div></div>
         <button class="btn sm" data-action="new-event">${I.plus.replace('<svg', '<svg width="16" height="16"')} Add Event</button>
       </div>
+      ${pendingBanner()}
       <div class="cal-layout">
         <section class="card cal" aria-label="Month view">
           <div class="cal-head">
@@ -282,6 +283,19 @@
             : `<div class="empty">Nothing coming up. Add an event or start a poll to find a date.</div>`}
         </section>
       </div>`;
+  }
+  function pendingBanner() {
+    const polls = pendingPolls(), food = foodPolls().filter((e) => !signedUp(e));
+    const n = polls.length + food.length;
+    if (!n) return '';
+    const names = [...polls.map((p) => p.title), ...food.map((e) => e.title)];
+    const list = names.length <= 2 ? names.join(' and ') : `${names.slice(0, 2).join(', ')} and ${names.length - 2} more`;
+    const what = polls.length && food.length ? 'responses' : polls.length ? (polls.length === 1 ? 'a vote' : 'votes') : (food.length === 1 ? 'a pitch-in sign-up' : 'pitch-in sign-ups');
+    return `<button class="pending-banner" data-action="nav" data-view="polls">
+      <span class="pb-icon">${I.poll}</span>
+      <span class="pb-text"><b>${n === 1 ? '1 poll is' : `${n} polls are`} waiting on you</b><small>${esc(list)} ${n === 1 ? 'needs' : 'need'} ${what}.</small></span>
+      <span class="pb-cta">Respond${I.right.replace('<svg', '<svg width="14" height="14"')}</span>
+    </button>`;
   }
   function eventRow(e) {
     const meta = [e.location && `<span>${esc(e.location)}</span>`, `<span>by ${esc(e.createdByName)}</span>`].filter(Boolean).join('');
@@ -342,10 +356,22 @@
         <div><h1 class="large-title">Polls</h1><div class="sub">Pick dates together and sign up for pitch-ins.</div></div>
         <button class="btn sm" data-action="new-poll">${I.plus.replace('<svg', '<svg width="16" height="16"')} New Poll</button>
       </div>
-      ${open.length ? `<div class="poll-grid">${open.map(card).join('')}</div>` : food.length ? '' : `
-        <div class="empty">${I.poll}<div>No open polls.</div><div class="small" style="margin-top:4px">Trying to find a date? Start a poll and let everyone vote.</div>
-          <button class="btn sm tinted" data-action="new-poll">${I.plus.replace('<svg', '<svg width="15" height="15"')} New Poll</button></div>`}
-      ${food.length ? `<div class="section-title">Pitch-in sign-ups</div><div class="poll-grid">${food.map(foodCard).join('')}</div>` : ''}
+      ${(() => {
+        const votedOn = (p) => p.responders.some((r) => r.userId === S.me.id);
+        const needPolls = open.filter((p) => !votedOn(p)), needFood = food.filter((e) => !signedUp(e));
+        const donePolls = open.filter(votedOn), doneFood = food.filter(signedUp);
+        const needCount = needPolls.length + needFood.length;
+        let html = '';
+        if (needCount) html += `<div class="section-title need-title" style="margin-top:4px">Needs your response <span class="badge-inline">${needCount}</span></div>
+          <div class="poll-grid">${needPolls.map(card).join('')}${needFood.map(foodCard).join('')}</div>`;
+        if (donePolls.length) html += `<div class="section-title">${needCount ? 'Open polls' : 'Open polls'}</div><div class="poll-grid">${donePolls.map(card).join('')}</div>`;
+        if (doneFood.length) html += `<div class="section-title">Pitch-in sign-ups</div><div class="poll-grid">${doneFood.map(foodCard).join('')}</div>`;
+        if (!open.length && !food.length) html += `
+          <div class="empty">${I.poll}<div>No open polls.</div><div class="small" style="margin-top:4px">Trying to find a date? Start a poll and let everyone vote.</div>
+            <button class="btn sm tinted" data-action="new-poll">${I.plus.replace('<svg', '<svg width="15" height="15"')} New Poll</button></div>`;
+        else if (!needCount) html = `<div class="all-caught-up">${I.check.replace('<svg', '<svg width="18" height="18"')} You\u2019re all caught up — nothing needs your response.</div>` + html;
+        return html.replace('<div class="section-title">Open polls', needCount ? '<div class="section-title">Open polls' : '<div class="section-title" style="margin-top:4px">Open polls');
+      })()}
       ${done.length ? `<div class="section-title">Scheduled</div><div class="poll-grid">${done.map(card).join('')}</div>` : ''}`;
   }
   function score(o) { return o.votes.reduce((s, v) => s + (v.answer === 'yes' ? 2 : v.answer === 'maybe' ? 1 : 0), 0); }

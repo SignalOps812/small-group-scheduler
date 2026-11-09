@@ -518,3 +518,24 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .bring-row .bring-select { flex: 0 0 auto; max-width: 42%; }
 .food-mid { display: flex; align-items: center; gap: 12px; }
 .food-cats { display: flex; flex-wrap: wrap; gap: 6px; }
+
+/* ---------- Pending responses ---------- */
+.pending-banner {
+  width: 100%; display: flex; align-items: center; gap: 14px; text-align: left; margin: -4px 0 18px;
+  padding: 14px 16px; border-radius: var(--r-lg); cursor: pointer;
+  background: color-mix(in srgb, var(--orange) 13%, var(--bg-elev)); box-shadow: var(--shadow);
+  border: .5px solid color-mix(in srgb, var(--orange) 35%, transparent); transition: transform .12s;
+}
+.pending-banner:hover { transform: translateY(-1px); }
+.pending-banner:active { transform: scale(.99); }
+.pb-icon { width: 40px; height: 40px; flex: 0 0 auto; border-radius: 11px; display: grid; place-items: center; background: var(--orange); color: #fff; }
+.pb-icon svg { width: 22px; height: 22px; }
+.pb-text { flex: 1; min-width: 0; }
+.pb-text b { display: block; font-weight: 600; }
+.pb-text small { display: block; font-size: 14px; color: var(--label-2); margin-top: 2px; }
+.pb-cta { display: inline-flex; align-items: center; gap: 4px; font-weight: 600; color: color-mix(in srgb, var(--orange) 85%, var(--label)); white-space: nowrap; }
+@media (max-width: 480px) { .pb-cta { display: none; } }
+.need-title { color: var(--label); }
+.badge-inline { display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px; margin-left: 6px; border-radius: 999px; background: var(--red); color: #fff; font-size: 13px; font-weight: 600; vertical-align: 2px; }
+.all-caught-up { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-radius: var(--r); margin-bottom: 4px;
+  background: color-mix(in srgb, var(--green) 12%, var(--bg-elev)); color: color-mix(in srgb, var(--green) 75%, var(--label)); font-weight: 500; font-size: 15px; }
