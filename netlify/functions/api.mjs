@@ -63,6 +63,22 @@ async function claimName(name, gid) {
   }
   return k;
 }
+// Optional phone: returns '' (none), an E.164 string (+18125551234), or throws.
+function parsePhone(v) {
+  const raw = str(v, 40);
+  if (!raw) return '';
+  const digits = raw.replace(/\D/g, '');
+  let e164;
+  if (raw.trim().startsWith('+')) e164 = '+' + digits;
+  else if (digits.length === 10) e164 = '+1' + digits;            // US/Canada without country code
+  else if (digits.length === 11 && digits[0] === '1') e164 = '+' + digits;
+  else e164 = '+' + digits;
+  if (!/^\+[1-9]\d{7,14}$/.test(e164) || (e164.startsWith('+1') && e164.length !== 12)) {
+    throw new HttpError(400, 'That phone number doesn\u2019t look right. Use a 10-digit number like (812) 555-0123.');
+  }
+  return e164;
+}
+const userOut = (u) => ({ id: u.id, name: u.name, email: u.email, phone: u.phone || '', notify: u.notify !== false });
 const normCode = (c) => str(c, 60).toLowerCase().replace(/\s+/g, '-');
 function checkCode(code) {
   if (!/^[a-z0-9][a-z0-9-]{2,22}[a-z0-9]$/.test(code)) {
@@ -318,7 +334,8 @@ route('POST', '/register', async ({ body, ctx }) => {
   if (!isEmail(email)) throw new HttpError(400, 'Please enter a valid email address.');
   if (password.length < 8) throw new HttpError(400, 'Password must be at least 8 characters.');
   if (await get(`emails/${email}`)) throw new HttpError(409, 'An account with that email already exists. Try signing in.');
-  const user = { id: newId(), name, email, pwHash: hashPassword(password), notify: true, groups: [], createdAt: now() };
+  const phone = parsePhone(body.phone);
+  const user = { id: newId(), name, email, phone, pwHash: hashPassword(password), notify: true, groups: [], createdAt: now() };
   await put(`users/${user.id}`, user);
   await put(`emails/${email}`, { userId: user.id });
   await createSession(ctx, user.id);
@@ -376,19 +393,20 @@ route('POST', '/reset', async ({ body, ctx }) => {
 route('GET', '/me', async ({ req }) => {
   const u = await currentUser(req);
   if (!u) return { user: null, groups: [] };
-  return { user: { id: u.id, name: u.name, email: u.email, notify: u.notify !== false }, groups: await myGroups(u) };
+  return { user: userOut(u), groups: await myGroups(u) };
 });
 
 route('PATCH', '/me', async ({ req, body }) => {
   const u = await requireUser(req);
   if (typeof body.notify === 'boolean') u.notify = body.notify;
+  if (body.phone !== undefined) u.phone = parsePhone(body.phone);
   if (body.name !== undefined) {
     const name = str(body.name, 80);
     if (!name) throw new HttpError(400, 'Name can’t be empty.');
     u.name = name;
   }
   await saveUser(u);
-  return { user: { id: u.id, name: u.name, email: u.email, notify: u.notify !== false } };
+  return { user: userOut(u) };
 });
 
 // --- Groups ---

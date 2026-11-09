@@ -40,6 +40,8 @@
     const diff = Math.round((parseYmd(s) - parseYmd(todayStr())) / 864e5);
     return diff === 0 ? 'Today' : diff === 1 ? 'Tomorrow' : diff === -1 ? 'Yesterday' : '';
   };
+  const validPhone = (p) => { const d = String(p).replace(/\D/g, ''); return String(p).trim().startsWith('+') ? d.length >= 8 && d.length <= 15 : d.length === 10 || (d.length === 11 && d[0] === '1'); };
+  const fmtPhone = (e) => { if (!e) return ''; const m = /^\+1(\d{3})(\d{3})(\d{4})$/.exec(e); return m ? `(${m[1]}) ${m[2]}-${m[3]}` : e; };
   const initials = (name) => (name || '?').trim().split(/\s+/).slice(0, 2).map((p) => p[0]).join('').toUpperCase();
   const PALETTE = ['blue', 'purple', 'orange', 'teal', 'pink', 'indigo', 'green', 'brown'];
   const colorFor = (id) => { let h = 0; for (const ch of String(id)) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return `var(--${PALETTE[h % PALETTE.length]})`; };
@@ -122,8 +124,10 @@
     }[m];
     let fields = '';
     if (m === 'signup') fields += `<div class="row"><label for="f-name">Name</label><input id="f-name" name="name" autocomplete="name" placeholder="First and last name" required></div>`;
+    const phoneRow = m === 'signup' ? `<div class="row"><label for="f-phone">Mobile</label><input id="f-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="Optional"></div>` : '';
     if (m !== 'reset') fields += `<div class="row"><label for="f-email">Email</label><input id="f-email" name="email" type="email" autocomplete="email" placeholder="you@example.com" required></div>`;
     if (m !== 'forgot') fields += `<div class="row"><label for="f-pw">Password</label><input id="f-pw" name="password" type="password" minlength="8" autocomplete="${m === 'signin' ? 'current-password' : 'new-password'}" placeholder="${m === 'signin' ? 'Required' : 'At least 8 characters'}" required></div>`;
+    fields += phoneRow;
     const btn = { signin: 'Sign In', signup: 'Create Account', forgot: 'Send Reset Link', reset: 'Save Password' }[m];
     const seg = (m === 'signin' || m === 'signup') ? `
       <div class="segmented" role="tablist" data-seg>
@@ -162,6 +166,7 @@
     if (S.authMode === 'signup' && !v.name?.trim()) return err('Please enter your name.');
     if (S.authMode !== 'reset' && !/^\S+@\S+\.\S+$/.test(v.email || '')) return err('Please enter a valid email address.');
     if (S.authMode !== 'forgot' && (v.password || '').length < (S.authMode === 'signin' ? 1 : 8)) return err(S.authMode === 'signin' ? 'Please enter your password.' : 'Password must be at least 8 characters.');
+    if (S.authMode === 'signup' && v.phone && !validPhone(v.phone)) return err('That phone number doesn\u2019t look right. Use a 10-digit number like (812) 555-0123, or leave it blank.');
     btn.disabled = true;
     try {
       if (S.authMode === 'signin') await api('POST', '/login', { email: v.email, password: v.password });
@@ -696,6 +701,7 @@
           <div class="detail-hero">${avatar(m.id, m.name, 'lg')}<h2 style="margin-top:12px">${esc(m.name)}</h2><div class="w">${esc(m.email)}</div></div>
           <div class="group">
             <div class="row"><label for="pr-name">Name</label><input id="pr-name" name="name" maxlength="80" value="${esc(m.name)}"></div>
+            <div class="row"><label for="pr-phone">Mobile</label><input id="pr-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="Optional" value="${esc(fmtPhone(m.phone))}"></div>
           </div>
           <div class="group-label" style="margin-top:22px">Notifications</div>
           <div class="group">
@@ -744,7 +750,8 @@
         openSheet('poll', { id: r.poll.id }); history.replaceState(null, '', '#polls/' + r.poll.id);
         toast(s.id ? 'Poll updated' : 'Poll created · Group notified');
       } else if (s.kind === 'profile') {
-        const r = await api('PATCH', '/me', { name: v.name });
+        if (v.phone && !validPhone(v.phone)) { btn.disabled = false; return err('That phone number doesn\u2019t look right. Use a 10-digit number like (812) 555-0123, or leave it blank.'); }
+        const r = await api('PATCH', '/me', { name: v.name, phone: v.phone || '' });
         S.me = r.user; await loadAll(); closeSheet(); render(); toast('Profile saved');
       }
     } catch (ex) { err(ex.message); btn.disabled = false; }
