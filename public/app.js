@@ -143,7 +143,7 @@
     $app.innerHTML = `
       <main class="auth-wrap">
         <div class="auth-card">
-          <div class="app-icon"><img src="/icon.svg" alt=""></div>
+          <div class="app-icon"><img src="/icon.svg?v=2" alt=""></div>
           <h1>${head[0]}</h1>
           <p class="sub">${head[1]}</p>
           ${seg}
@@ -202,7 +202,7 @@
     else body = renderMembers();
     $app.innerHTML = `
       <header class="topbar">
-        <div class="brand"><img src="/icon.svg" alt=""><span>${esc(S.config.appName)}</span></div>
+        <div class="brand"><img src="/icon.svg?v=2" alt=""><span>${esc(S.config.appName)}</span></div>
         <div class="segmented" role="tablist" aria-label="Sections">
           <span class="thumb" style="width:calc(${100 / tabs.length}% - ${4 / tabs.length}px);transform:translateX(${idx * 100}%)"></span>
           ${tabs.map(([k, label]) => `<button role="tab" aria-selected="${S.view === k}" data-action="nav" data-view="${k}">${label}${k === 'polls' && pend ? `<span class="badge">${pend}</span>` : ''}</button>`).join('')}
@@ -367,7 +367,7 @@
     $app.innerHTML = `
       <main class="auth-wrap">
         <div class="auth-card">
-          <div class="app-icon"><img src="/icon.svg" alt=""></div>
+          <div class="app-icon"><img src="/icon.svg?v=2" alt=""></div>
           <h1>Hi, ${esc(S.me.name.split(' ')[0])}</h1>
           <p class="sub">Join your group with the code your leader shared, or start a new group of your own.</p>
           <div class="segmented" role="tablist">
