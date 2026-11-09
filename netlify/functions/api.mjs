@@ -758,7 +758,7 @@ export default async function handler(req, context = {}) {
   const headers = { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' };
   let status = 200, payload;
   try {
-    if (req.method !== 'GET' && !(req.headers.get('content-type') || '').includes('application/json')) throw new HttpError(415, 'Expected JSON.');
+    if (!['GET', 'DELETE'].includes(req.method) && !(req.headers.get('content-type') || '').includes('application/json')) throw new HttpError(415, 'Expected JSON.');
     const r = routes.find((x) => x.method === req.method && x.re.test(url.pathname));
     if (!r) throw new HttpError(404, 'Not found.');
     await migrateLegacy();

@@ -74,6 +74,24 @@
     minus: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10" fill="var(--red)"/><path d="M7.5 12h9" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></svg>',
   };
 
+  // iOS-style alert that works everywhere (some browsers block window.confirm)
+  function ask({ title, message = '', ok = 'OK', destructive = false }) {
+    return new Promise((resolve) => {
+      const wrap = document.createElement('div');
+      wrap.className = 'alert-backdrop';
+      wrap.innerHTML = `<div class="alert" role="alertdialog" aria-modal="true" aria-labelledby="alert-t">
+        <div class="alert-body"><div class="alert-title" id="alert-t">${esc(title)}</div>${message ? `<div class="alert-msg">${esc(message)}</div>` : ''}</div>
+        <div class="alert-actions"><button type="button" data-r="0">Cancel</button><button type="button" data-r="1" class="${destructive ? 'destructive' : 'primary'}">${esc(ok)}</button></div>
+      </div>`;
+      const done = (v) => { document.removeEventListener('keydown', onKey, true); wrap.remove(); resolve(v); };
+      const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); done(false); } if (e.key === 'Enter') { e.preventDefault(); done(true); } };
+      wrap.addEventListener('click', (e) => { const b = e.target.closest('button[data-r]'); if (b) done(b.dataset.r === '1'); else if (e.target === wrap) done(false); });
+      document.addEventListener('keydown', onKey, true);
+      document.body.appendChild(wrap);
+      wrap.querySelector(destructive ? 'button[data-r="0"]' : 'button[data-r="1"]').focus();
+    });
+  }
+
   function toast(msg) {
     $toast.textContent = msg;
     $toast.classList.add('show');
@@ -84,8 +102,8 @@
   async function api(method, path, body) {
     const res = await fetch('/api' + path, {
       method, credentials: 'same-origin',
-      headers: body !== undefined ? { 'Content-Type': 'application/json' } : {},
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      headers: method !== 'GET' ? { 'Content-Type': 'application/json' } : {},
+      body: method !== 'GET' ? JSON.stringify(body ?? {}) : undefined,
     });
     let data = {};
     try { data = await res.json(); } catch {}
@@ -965,7 +983,7 @@
     'edit-event': (el) => openSheet('event-form', { id: el.dataset.id }),
     'delete-event': async (el) => {
       const e = S.events.find((x) => x.id === el.dataset.id);
-      if (!confirm(`Delete "${e.title}"?${e.pollId ? ' Its poll will reopen for voting.' : ''}`)) return;
+      if (!(await ask({ title: `Delete “${e.title}”?`, message: `This removes it from the calendar for everyone${e.pitchIn ? ', along with the pitch-in sign-ups' : ''}.${e.pollId ? ' Its poll will reopen for voting.' : ''}`, ok: 'Delete', destructive: true }))) return;
       try { await api('DELETE', gp(`/events/${e.id}`)); await loadAll(); closeSheet(); render(); toast('Event deleted'); } catch (ex) { toast(ex.message); }
     },
     ics: (el) => downloadIcs(S.events.find((x) => x.id === el.dataset.id)),
@@ -1015,7 +1033,7 @@
     schedule: async (el) => {
       const p = S.polls.find((x) => x.id === el.dataset.poll);
       const o = p.options.find((x) => x.id === el.dataset.opt);
-      if (!confirm(`Schedule "${p.title}" for ${fmtLong(o.date)}${o.time ? ' at ' + fmtTime(o.time) : ''}?\n\nIt will go on the calendar, voting will close, and everyone will get an email.`)) return;
+      if (!(await ask({ title: `Schedule for ${fmtLong(o.date)}${o.time ? ' at ' + fmtTime(o.time) : ''}?`, message: `“${p.title}” will go on the calendar, voting will close, and everyone will get an email.`, ok: 'Schedule' }))) return;
       try {
         await api('POST', gp(`/polls/${p.id}/schedule`), { optionId: o.id });
         await loadAll(); refreshSheet(); render(); toast('Scheduled · Added to the calendar');
@@ -1023,7 +1041,7 @@
     },
     'delete-poll': async (el) => {
       const p = S.polls.find((x) => x.id === el.dataset.id);
-      if (!confirm(`Delete the poll "${p.title}" and all its responses?${p.eventId ? ' The calendar event will stay.' : ''}`)) return;
+      if (!(await ask({ title: `Delete “${p.title}”?`, message: `All responses${p.pitchIn ? ' and pitch-in sign-ups' : ''} will be deleted.${p.eventId ? ' The calendar event will stay.' : ''}`, ok: 'Delete', destructive: true }))) return;
       try { await api('DELETE', gp(`/polls/${p.id}`)); await loadAll(); closeSheet(); render(); toast('Poll deleted'); } catch (ex) { toast(ex.message); }
     },
     'goto-date': (el) => {
@@ -1059,7 +1077,7 @@
     'copy-invite': async () => toast((await copyText(inviteText())) ? 'Invite copied — paste it in a text or email' : 'Couldn’t copy. The code is ' + curGroup().code),
     'leave-group': async () => {
       const g = curGroup();
-      if (!confirm(`Leave ${g.name}? You'll stop seeing its calendar and getting its emails. You can rejoin with the code.`)) return;
+      if (!(await ask({ title: `Leave ${g.name}?`, message: 'You’ll stop seeing its calendar and getting its emails. You can rejoin with the group code.', ok: 'Leave', destructive: true }))) return;
       try {
         await api('POST', gp('/leave'), {});
         S.gid = null; await refreshGroups(); closeSheet(true);
@@ -1068,7 +1086,7 @@
       } catch (ex) { toast(ex.message); }
     },
     'bring-clear': async (el) => {
-      if (!confirm('Remove everything you signed up to bring?')) return;
+      if (!(await ask({ title: 'Remove your items?', message: 'Everything you signed up to bring will be removed.', ok: 'Remove', destructive: true }))) return;
       try { await saveBring(el.dataset.kind, el.dataset.id, []); toast('Removed your items'); } catch (ex) { toast(ex.message); }
     },
     'bring-row-add': (el) => {
@@ -1108,7 +1126,7 @@
     },
     'remove-member': async (el) => {
       const m = S.members.find((x) => x.id === el.dataset.id);
-      if (!confirm(`Remove ${m.name} from ${curGroup().name}? They can rejoin only with the current code.`)) return;
+      if (!(await ask({ title: `Remove ${m.name}?`, message: `They’ll be removed from ${curGroup().name} and can rejoin only with the current group code.`, ok: 'Remove', destructive: true }))) return;
       try { await api('DELETE', gp(`/members/${encodeURIComponent(m.id)}`)); await refreshGroups(); await loadAll(); closeSheet(); render(); toast(`${m.name} removed`); }
       catch (ex) { toast(ex.message); }
     },
