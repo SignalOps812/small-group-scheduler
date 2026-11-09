@@ -1,0 +1,14 @@
+{
+  "name": "small-group-scheduler",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Shared calendar and scheduling polls for a small group, hosted on Netlify.",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "dev": "netlify dev"
+  },
+  "dependencies": {
+    "@netlify/blobs": "^10.0.0"
+  }
+}

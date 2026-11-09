@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 180 180">
+  <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#f2f2f7"/></linearGradient></defs>
+  <rect width="180" height="180" rx="40" fill="url(#g)"/>
+  <text x="90" y="56" text-anchor="middle" font-family="-apple-system,Helvetica,Arial,sans-serif" font-size="30" font-weight="600" fill="#ff3b30">GROUP</text>
+  <g fill="#007aff">
+    <circle cx="62" cy="108" r="17"/><circle cx="118" cy="108" r="17"/><circle cx="90" cy="96" r="20"/>
+    <path d="M38 152c2-20 14-30 30-30h44c16 0 28 10 30 30z" opacity=".9"/>
+  </g>
+</svg>
