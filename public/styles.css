@@ -510,3 +510,6 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .bring-actions { justify-content: space-between; padding-top: 10px; padding-bottom: 10px; }
 .danger-link { color: var(--red); font-size: 15px; }
 .bring-form .row > label { min-width: 104px; }
+/* switches inside form rows must keep their own size */
+.row > label.switch { min-width: 0; flex: 0 0 51px; width: 51px; }
+.row:has(> label.switch) > span:first-child { flex: 1; min-width: 0; padding-right: 12px; }
