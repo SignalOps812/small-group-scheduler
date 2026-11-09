@@ -7,6 +7,7 @@
 //   sessions/<token>, resets/<token>
 //   groups/<gid>                   { id, name, code, createdBy, createdAt }
 //   codes/<code>                   { groupId }
+//   names/<sha256(normalized name)> { groupId }   — keeps group names unique
 //   g/<gid>/members/<uid>          { userId, role: 'organizer'|'member', joinedAt }
 //   g/<gid>/events/<id>, g/<gid>/polls/<id>, g/<gid>/votes/<pollId>/<uid>, g/<gid>/emaillog/<ts>
 import crypto from 'node:crypto';
@@ -48,6 +49,19 @@ function parseCost(v) {
   const n = Number(String(v).replace(/[$,\s]/g, ''));
   if (!Number.isFinite(n) || n < 0 || n > 1e6) throw new HttpError(400, 'Cost must be a positive number.');
   return Math.round(n * 100) / 100;
+}
+// "Men's  Breakfast" and "mens breakfast" count as the same name
+const normName = (n) => String(n).normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  .replace(/['\u2019]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+const nameKey = (n) => `names/${crypto.createHash('sha256').update(normName(n)).digest('hex').slice(0, 40)}`;
+async function claimName(name, gid) {
+  if (!normName(name)) throw new HttpError(400, 'Group names need at least one letter or number.');
+  const k = nameKey(name);
+  const taken = await get(k);
+  if (taken && taken.groupId !== gid && (await get(`groups/${taken.groupId}`))) {
+    throw new HttpError(409, 'There\u2019s already a group with that name. Try adding something to make it unique, like your church or town.');
+  }
+  return k;
 }
 const normCode = (c) => str(c, 60).toLowerCase().replace(/\s+/g, '-');
 function checkCode(code) {
@@ -138,7 +152,16 @@ function rateLimit(key, max, windowMs) {
 let migrated = false;
 async function migrateLegacy() {
   if (migrated) return;
-  if (await get('meta/v2')) { migrated = true; return; }
+  if (await get('meta/v3')) { migrated = true; return; }
+  if (!(await get('meta/v2'))) await migrateV2();
+  if (!(await get('meta/v3'))) { // index existing group names (first one keeps a duplicated name)
+    const groups = (await listAll('groups/')).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    for (const g of groups) { const k = nameKey(g.name); if (!(await get(k))) await put(k, { groupId: g.id }); }
+    await put('meta/v3', { at: now() });
+  }
+  migrated = true;
+}
+async function migrateV2() {
   const [legacyEvents, legacyPolls, users] = await Promise.all([keys('events/'), keys('polls/'), listAll('users/')]);
   const legacyUsers = users.filter((u) => !u.groups);
   if (legacyUsers.length || legacyEvents.length || legacyPolls.length) {
@@ -157,7 +180,6 @@ async function migrateLegacy() {
     for (const k of await keys('emaillog/')) await del(k);
   }
   await put('meta/v2', { at: now() });
-  migrated = true;
 }
 
 // ---------- Email ----------
@@ -376,8 +398,11 @@ route('POST', '/groups', async ({ req, body }) => {
   if (!name) throw new HttpError(400, 'Please give your group a name.');
   const code = checkCode(normCode(body.code));
   if (u.groups.length >= 25) throw new HttpError(400, 'You’ve reached the limit of 25 groups.');
+  const gid = newId();
+  const nk = await claimName(name, gid);
   if (await get(`codes/${code}`)) throw new HttpError(409, 'That code is already taken. Try another one.');
-  const group = { id: newId(), name, code, createdBy: u.id, createdAt: now() };
+  const group = { id: gid, name, code, createdBy: u.id, createdAt: now() };
+  await put(nk, { groupId: gid });
   await put(`groups/${group.id}`, group);
   await put(`codes/${code}`, { groupId: group.id });
   await addMember(u, group.id, 'organizer');
@@ -404,6 +429,11 @@ route('PATCH', '/groups/:gid', async ({ req, body, params }) => {
   if (body.name !== undefined) {
     const name = str(body.name, 60);
     if (!name) throw new HttpError(400, 'Please give your group a name.');
+    if (normName(name) !== normName(g.name)) {
+      const nk = await claimName(name, g.id);
+      await put(nk, { groupId: g.id });
+      await del(nameKey(g.name));
+    }
     g.name = name;
   }
   if (body.code !== undefined) {
