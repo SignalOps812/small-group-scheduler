@@ -24,7 +24,9 @@ const SESSION_DAYS = 60;
 export const config = { path: '/api/*' };
 
 // ---------- Storage ----------
-let _store;
+// Create the store per request: Netlify gives each invocation a fresh, short-lived
+// access token, so a store cached across invocations eventually fails with "Token expired".
+let _store = null;
 const store = () => (_store ||= getStore({ name: 'smallgroup', consistency: 'strong' }));
 const get = (key) => store().get(key, { type: 'json' });
 const put = (key, val) => store().setJSON(key, val);
@@ -747,6 +749,7 @@ route('DELETE', '/groups/:gid/polls/:id', async ({ req, params }) => {
 
 // ---------- Handler ----------
 export default async function handler(req, context = {}) {
+  _store = null; // fresh store (and token) for every request
   const url = new URL(req.url);
   const pending = [];
   const ctx = {
