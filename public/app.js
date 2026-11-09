@@ -65,6 +65,9 @@
     check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>',
     q: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9.2 9a3 3 0 0 1 5.8 1c0 2-3 2.5-3 4.5"/><circle cx="12" cy="18.5" r=".6" fill="currentColor"/></svg>',
     x: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M7 7l10 10M17 7L7 17"/></svg>',
+    phone: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M6.6 10.8a15.2 15.2 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25c1.1.37 2.3.57 3.6.57a1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.3.2 2.5.57 3.6a1 1 0 0 1-.25 1z"/></svg>',
+    message: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3C6.5 3 2 6.8 2 11.5c0 2.4 1.2 4.6 3.1 6.1L4.4 21l4-2c1.1.3 2.3.5 3.6.5 5.5 0 10-3.8 10-8.5S17.5 3 12 3z"/></svg>',
+    mail: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M4 7l8 6 8-6"/></svg>',
     more: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="6" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="18" cy="12" r="1.8"/></svg>',
     info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="7.8" r=".6" fill="currentColor"/></svg>',
     key: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3M14 9l2 2"/></svg>',
@@ -345,9 +348,15 @@
           </div>
         </div>
         <div class="group people" style="margin-top:22px">
-          ${S.members.map((m) => `<div class="person">${avatar(m.id, m.name)}<div class="nm">${esc(m.name)}${m.id === S.me.id ? ' <span class="muted">(you)</span>' : ''}<small>Joined ${esc(joined(m.joined))}</small></div>${m.role === 'organizer' ? '<span class="pill blue">Organizer</span>' : ''}${org && m.id !== S.me.id ? `<button class="icon-btn" data-action="member-actions" data-id="${esc(m.id)}" aria-label="Manage ${esc(m.name)}">${I.more}</button>` : ''}</div>`).join('')}
+          ${S.members.map((m) => `<button class="person person-btn" data-action="member-actions" data-id="${esc(m.id)}" aria-label="${esc(m.name)} — contact info">
+            ${avatar(m.id, m.name)}
+            <span class="nm">${esc(m.name)}${m.id === S.me.id ? ' <span class="muted">(you)</span>' : ''}
+              <small>${esc([m.phone && fmtPhone(m.phone), m.email].filter(Boolean).join(' · '))}</small></span>
+            ${m.role === 'organizer' ? '<span class="pill blue">Organizer</span>' : ''}
+            <span class="chev">${I.right.replace('<svg', '<svg width="14" height="14"')}</span>
+          </button>`).join('')}
         </div>
-        <p class="group-foot">Everyone here gets an email when a new event or poll is added, unless they turn it off in their profile.${org ? ' As an organizer, tap ••• next to someone to make them an organizer or remove them.' : ''}</p>
+        <p class="group-foot">Tap someone to email, call or text them. Members of a group can see each other\u2019s email and mobile number.${org ? ' As an organizer, you can also make someone an organizer or remove them there.' : ''}</p>
       </div>`;
   }
 
@@ -684,14 +693,26 @@
       if (!m) return '';
       return `${head('Member', 'Done')}
         <div class="sheet-body">
-          <div class="detail-hero">${avatar(m.id, m.name, 'lg')}<h2 style="margin-top:12px">${esc(m.name)}</h2><div class="w">${m.role === 'organizer' ? 'Organizer' : 'Member'} of ${esc(curGroup().name)}</div></div>
+          <div class="detail-hero">${avatar(m.id, m.name, 'lg')}<h2 style="margin-top:12px">${esc(m.name)}</h2><div class="w">${m.role === 'organizer' ? 'Organizer' : 'Member'} of ${esc(curGroup().name)} · Joined ${esc(new Date(m.joined).toLocaleDateString(undefined, { month: 'long', year: 'numeric' }))}</div></div>
+          ${m.phone ? `<div class="contact-actions">
+            <a class="contact-btn" href="tel:${esc(m.phone)}">${I.phone}<span>Call</span></a>
+            <a class="contact-btn" href="sms:${esc(m.phone)}">${I.message}<span>Text</span></a>
+            <a class="contact-btn" href="mailto:${esc(m.email)}">${I.mail}<span>Email</span></a>
+          </div>` : ''}
+          <div class="group-label" style="margin-top:22px">Contact</div>
+          <div class="group kv">
+            <div class="row"><span>Mobile</span><span class="v">${m.phone ? `<a class="link" href="tel:${esc(m.phone)}">${esc(fmtPhone(m.phone))}</a>` : 'Not provided'}</span></div>
+            <div class="row"><span>Email</span><span class="v"><a class="link" href="mailto:${esc(m.email)}">${esc(m.email)}</a></span></div>
+          </div>
+          ${m.id !== S.me.id ? `<div class="group" style="margin-top:22px"><div class="row button-row" data-action="copy-contact" data-id="${esc(m.id)}" role="button" tabindex="0">Copy Contact Info</div></div>` : ''}
+          ${isOrganizer() && m.id !== S.me.id ? `<div class="group-label" style="margin-top:22px">Organizer</div>
           <div class="group">
             ${m.role === 'organizer'
               ? `<div class="row button-row" data-action="set-role" data-id="${esc(m.id)}" data-role="member" role="button" tabindex="0">Remove Organizer Role</div>`
               : `<div class="row button-row" data-action="set-role" data-id="${esc(m.id)}" data-role="organizer" role="button" tabindex="0">Make Organizer</div>`}
           </div>
           <p class="group-foot">Organizers can edit or delete any event or poll, change the group code, and manage members.</p>
-          <div class="group" style="margin-top:22px"><div class="row danger-row" data-action="remove-member" data-id="${esc(m.id)}" role="button" tabindex="0">Remove from Group</div></div>
+          <div class="group" style="margin-top:22px"><div class="row danger-row" data-action="remove-member" data-id="${esc(m.id)}" role="button" tabindex="0">Remove from Group</div></div>` : ''}
         </div>`;
     }
     if (s.kind === 'profile') {
@@ -703,6 +724,7 @@
             <div class="row"><label for="pr-name">Name</label><input id="pr-name" name="name" maxlength="80" value="${esc(m.name)}"></div>
             <div class="row"><label for="pr-phone">Mobile</label><input id="pr-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="Optional" value="${esc(fmtPhone(m.phone))}"></div>
           </div>
+          <p class="group-foot">Your email and mobile number are visible to members of your groups. Leave mobile blank to keep it private.</p>
           <div class="group-label" style="margin-top:22px">Notifications</div>
           <div class="group">
             <div class="row"><span>Email me about new events and polls</span><label class="switch"><input type="checkbox" name="notify" data-action="toggle-notify" ${m.notify ? 'checked' : ''}><span></span></label></div>
@@ -943,6 +965,11 @@
       } catch (ex) { toast(ex.message); }
     },
     'member-actions': (el) => openSheet('member', { id: el.dataset.id }),
+    'copy-contact': async (el) => {
+      const m = S.members.find((x) => x.id === el.dataset.id);
+      const t = [m.name, m.phone && fmtPhone(m.phone), m.email].filter(Boolean).join('\n');
+      toast((await copyText(t)) ? 'Contact info copied' : 'Couldn\u2019t copy');
+    },
     'set-role': async (el) => {
       try {
         await api('PATCH', gp(`/members/${encodeURIComponent(el.dataset.id)}`), { role: el.dataset.role });

@@ -486,7 +486,7 @@ route('GET', '/groups/:gid/members', async ({ req, params }) => {
   const m = await requireMember(req, params.gid);
   const members = await listAll(`g/${m.group.id}/members/`);
   const users = await Promise.all(members.map((x) => get(`users/${x.userId}`)));
-  return { members: members.map((x, i) => users[i] && ({ id: x.userId, name: users[i].name, role: x.role, joined: x.joinedAt }))
+  return { members: members.map((x, i) => users[i] && ({ id: x.userId, name: users[i].name, email: users[i].email, phone: users[i].phone || '', role: x.role, joined: x.joinedAt }))
     .filter(Boolean).sort((a, b) => a.name.localeCompare(b.name)) };
 });
 
