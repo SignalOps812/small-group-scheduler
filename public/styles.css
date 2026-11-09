@@ -513,3 +513,6 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 /* switches inside form rows must keep their own size */
 .row > label.switch { min-width: 0; flex: 0 0 51px; width: 51px; }
 .row:has(> label.switch) > span:first-child { flex: 1; min-width: 0; padding-right: 12px; }
+.bring-row { gap: 10px; }
+.bring-row input[name="item"] { flex: 1 1 auto; min-width: 0; }
+.bring-row .bring-select { flex: 0 0 auto; max-width: 42%; }

@@ -10,7 +10,7 @@
 //   names/<sha256(normalized name)> { groupId }   — keeps group names unique
 //   g/<gid>/members/<uid>          { userId, role: 'organizer'|'member', joinedAt }
 //   g/<gid>/events/<id>, g/<gid>/polls/<id>, g/<gid>/votes/<pollId>/<uid>, g/<gid>/emaillog/<ts>
-//   g/<gid>/bring/<p|e>-<id>/<uid>  { target, userId, item, category, at }   — pitch-in contributions
+//   g/<gid>/bring/<p|e>-<id>/<uid>  { target, userId, items: [{ item, category }], at }   — pitch-in sign-ups
 import crypto from 'node:crypto';
 import { getStore } from '@netlify/blobs';
 
@@ -302,16 +302,19 @@ async function nameMap(gid) {
 // ---------- Pitch-in ----------
 const BRING_CATS = ['Main dish', 'Side dish', 'Salad', 'Bread', 'Dessert', 'Drinks', 'Supplies', 'Other'];
 const bringPrefix = (gid, target) => `g/${gid}/bring/${target}/`;
-const contribOut = (c, names) => ({ userId: c.userId, name: names[c.userId] || 'Former member', item: c.item, category: c.category, at: c.at });
+const contribItems = (c) => (Array.isArray(c.items) ? c.items : c.item ? [{ item: c.item, category: c.category }] : []);
+const contribOut = (c, names) => ({ userId: c.userId, name: names[c.userId] || 'Former member', items: contribItems(c), at: c.at });
 async function contributions(gid, target, names) {
   return (await listAll(bringPrefix(gid, target))).sort((a, b) => a.at.localeCompare(b.at)).map((c) => contribOut(c, names));
 }
 async function saveContribution(gid, target, uid, body) {
   const key = bringPrefix(gid, target) + uid;
-  const item = str(body?.item, 200);
-  if (!item) { await del(key); return; }
-  const category = BRING_CATS.includes(body?.category) ? body.category : 'Other';
-  await put(key, { target, userId: uid, item, category, at: now() });
+  const raw = Array.isArray(body?.items) ? body.items : [{ item: body?.item, category: body?.category }];
+  const items = raw.slice(0, 15)
+    .map((x) => ({ item: str(x?.item, 200), category: BRING_CATS.includes(x?.category) ? x.category : 'Other' }))
+    .filter((x) => x.item);
+  if (!items.length) { await del(key); return; }
+  await put(key, { target, userId: uid, items, at: now() });
 }
 async function clearContributions(gid, target) {
   await Promise.all((await keys(bringPrefix(gid, target))).map((k) => del(k)));

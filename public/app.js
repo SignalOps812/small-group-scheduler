@@ -285,7 +285,7 @@
     return `<button class="event" style="--c:${colorFor(e.createdBy)}" data-action="open-event" data-id="${esc(e.id)}">
       <span class="bar"></span>
       <span><span class="title">${esc(e.title)}</span><span class="meta">${meta}</span></span>
-      <span class="side"><span class="time">${e.time ? fmtTime(e.time) : 'All day'}</span><span class="pills">${e.pitchIn ? `<span class="pill purple">Pitch-in${e.contributions?.length ? ' · ' + e.contributions.length : ''}</span>` : ''}${cost ? `<span class="pill ${e.cost === 0 ? 'green' : ''}">${esc(cost)}</span>` : ''}</span></span>
+      <span class="side"><span class="time">${e.time ? fmtTime(e.time) : 'All day'}</span><span class="pills">${e.pitchIn ? `<span class="pill purple">Pitch-in${bringCount(e.contributions) ? ' · ' + bringCount(e.contributions) : ''}</span>` : ''}${cost ? `<span class="pill ${e.cost === 0 ? 'green' : ''}">${esc(cost)}</span>` : ''}</span></span>
     </button>`;
   }
 
@@ -789,32 +789,43 @@
 
   // ---------- Pitch-in ----------
   const BRING_CATS = ['Main dish', 'Side dish', 'Salad', 'Bread', 'Dessert', 'Drinks', 'Supplies', 'Other'];
+  const bringCount = (list) => (list || []).reduce((n, c) => n + (c.items?.length || 0), 0);
+  function bringRow(it, removable) {
+    return `<div class="row bring-row">
+      <button type="button" class="opt-remove" data-action="bring-row-remove" aria-label="Remove this item" ${removable ? '' : 'disabled'}>${I.minus.replace('<svg', '<svg width="22" height="22"')}</button>
+      <input name="item" maxlength="200" placeholder="e.g. Mac and cheese" value="${esc(it.item || '')}" aria-label="Item">
+      <select name="category" class="bring-select" aria-label="Category">${BRING_CATS.map((c) => `<option${(it.category || 'Main dish') === c ? ' selected' : ''}>${c}</option>`).join('')}</select>
+    </div>`;
+  }
   function bringSection(kind, obj, editable) {
     const list = obj.contributions || [];
     const mine = list.find((c) => c.userId === S.me.id);
-    const groups = BRING_CATS.map((cat) => [cat, list.filter((c) => c.category === cat)]).filter(([, l]) => l.length);
+    const flat = list.flatMap((c) => c.items.map((it) => ({ ...it, userId: c.userId, name: c.name })));
+    const groups = BRING_CATS.map((cat) => [cat, flat.filter((x) => x.category === cat)]).filter(([, l]) => l.length);
     const summary = groups.length
       ? `<div class="group bring-list">${groups.map(([cat, l]) => `
           <div class="bring-cat"><span>${esc(cat)}</span><span class="pill">${l.length}</span></div>
-          ${l.map((c) => `<div class="bring-item">${avatar(c.userId, c.name, 'xs')}<span class="bi-text"><b>${esc(c.item)}</b><small>${esc(c.name)}${c.userId === S.me.id ? ' (you)' : ''}</small></span></div>`).join('')}`).join('')}
+          ${l.map((x) => `<div class="bring-item">${avatar(x.userId, x.name, 'xs')}<span class="bi-text"><b>${esc(x.item)}</b><small>${esc(x.name)}${x.userId === S.me.id ? ' (you)' : ''}</small></span></div>`).join('')}`).join('')}
         </div>`
       : `<div class="empty small" style="padding:18px">Nobody has signed up yet${editable ? ' — be the first!' : '.'}</div>`;
+    const myItems = mine?.items?.length ? mine.items : [{ item: '', category: 'Main dish' }];
     const form = editable ? `
       <form class="group bring-form" data-kind="${kind}" data-id="${esc(obj.id)}" autocomplete="off" novalidate>
-        <div class="row"><label for="bring-item-${esc(obj.id)}">I\u2019m bringing</label><input id="bring-item-${esc(obj.id)}" name="item" maxlength="200" placeholder="e.g. Mac and cheese" value="${esc(mine?.item || '')}"></div>
-        <div class="row"><label for="bring-cat-${esc(obj.id)}">Category</label><select id="bring-cat-${esc(obj.id)}" name="category" class="bring-select">${BRING_CATS.map((c) => `<option${(mine?.category || 'Main dish') === c ? ' selected' : ''}>${c}</option>`).join('')}</select></div>
+        ${myItems.map((it) => bringRow(it, myItems.length > 1)).join('')}
+        <div class="row button-row" data-action="bring-row-add" role="button" tabindex="0">${I.plus.replace('<svg', '<svg width="18" height="18"')} Add another item</div>
         <div class="row bring-actions">
-          ${mine ? `<button type="button" class="link danger-link" data-action="bring-clear" data-kind="${kind}" data-id="${esc(obj.id)}">Remove mine</button>` : '<span></span>'}
-          <button type="submit" class="btn sm">${mine ? 'Update' : 'Sign Up'}</button>
+          ${mine ? `<button type="button" class="link danger-link" data-action="bring-clear" data-kind="${kind}" data-id="${esc(obj.id)}">Remove all mine</button>` : '<span></span>'}
+          <button type="submit" class="btn sm">${mine ? 'Save Changes' : 'Sign Up'}</button>
         </div>
-      </form>` : (kind === 'poll' && obj.eventId ? `<p class="group-foot">The date is set. Add or change what you\u2019re bringing on the calendar event.</p>` : '');
-    return `<div class="group-label" style="margin-top:26px">Pitch-in · who\u2019s bringing what${list.length ? ` · ${list.length}` : ''}</div>
+      </form>` : (kind === 'poll' && obj.eventId ? `<p class="group-foot">The date is set. Add or change what you’re bringing on the calendar event.</p>` : '');
+    const total = flat.length;
+    return `<div class="group-label" style="margin-top:26px">Pitch-in · who’s bringing what${total ? ` · ${total} item${total === 1 ? '' : 's'}` : ''}</div>
       ${summary}
-      ${form ? `<div class="group-label" style="margin-top:16px">${mine ? 'Your item' : 'What will you bring?'}</div>${form}` : ''}`;
+      ${form ? `<div class="group-label" style="margin-top:16px">${mine ? `Your items · ${mine.items.length}` : 'What will you bring?'}</div>${form}` : ''}`;
   }
-  async function saveBring(kind, id, item, category) {
+  async function saveBring(kind, id, items) {
     const path = kind === 'poll' ? `/polls/${id}/bring` : `/events/${id}/bring`;
-    const r = await api('PUT', gp(path), { item, category });
+    const r = await api('PUT', gp(path), { items });
     if (kind === 'poll') { const i = S.polls.findIndex((x) => x.id === id); if (i >= 0) S.polls[i] = r.poll; }
     else { const i = S.events.findIndex((x) => x.id === id); if (i >= 0) S.events[i] = r.event; }
     refreshSheet(); render();
@@ -1006,7 +1017,24 @@
       } catch (ex) { toast(ex.message); }
     },
     'bring-clear': async (el) => {
-      try { await saveBring(el.dataset.kind, el.dataset.id, '', ''); toast('Removed your item'); } catch (ex) { toast(ex.message); }
+      if (!confirm('Remove everything you signed up to bring?')) return;
+      try { await saveBring(el.dataset.kind, el.dataset.id, []); toast('Removed your items'); } catch (ex) { toast(ex.message); }
+    },
+    'bring-row-add': (el) => {
+      const f = el.closest('form'), rows = f.querySelectorAll('.bring-row');
+      if (rows.length >= 15) return toast('That\u2019s the limit of 15 items');
+      const last = rows[rows.length - 1];
+      const tmp = document.createElement('div');
+      tmp.innerHTML = bringRow({ item: '', category: last?.querySelector('[name="category"]').value || 'Main dish' }, true);
+      el.before(tmp.firstElementChild);
+      f.querySelectorAll('.bring-row .opt-remove').forEach((b) => { b.disabled = f.querySelectorAll('.bring-row').length <= 1; });
+      el.previousElementSibling.querySelector('[name="item"]').focus();
+    },
+    'bring-row-remove': (el) => {
+      const f = el.closest('form');
+      if (f.querySelectorAll('.bring-row').length <= 1) return;
+      el.closest('.bring-row').remove();
+      f.querySelectorAll('.bring-row .opt-remove').forEach((b) => { b.disabled = f.querySelectorAll('.bring-row').length <= 1; });
     },
     'member-actions': (el) => openSheet('member', { id: el.dataset.id }),
     'copy-contact': async (el) => {
@@ -1040,11 +1068,10 @@
     const f = ev.target;
     if (!f.classList?.contains('bring-form')) return;
     ev.preventDefault();
-    const itemEl = f.querySelector('[name="item"]'), catEl = f.querySelector('[name="category"]');
-    const item = itemEl.value.trim();
-    if (!item) { itemEl.focus(); return toast('Type what you\u2019re bringing'); }
+    const items = [...f.querySelectorAll('.bring-row')].map((r) => ({ item: r.querySelector('[name="item"]').value.trim(), category: r.querySelector('[name="category"]').value })).filter((x) => x.item);
+    if (!items.length) { f.querySelector('[name="item"]').focus(); return toast('Type what you\u2019re bringing'); }
     const btn = f.querySelector('button[type=submit]'); btn.disabled = true;
-    try { await saveBring(f.dataset.kind, f.dataset.id, item, catEl.value); toast('Thanks — you\u2019re signed up'); }
+    try { await saveBring(f.dataset.kind, f.dataset.id, items); toast(items.length === 1 ? 'Thanks — you\u2019re signed up' : `Thanks — you\u2019re signed up for ${items.length} items`); }
     catch (ex) { toast(ex.message); btn.disabled = false; }
   });
   document.addEventListener('change', (ev) => {
