@@ -104,6 +104,10 @@
   }
   const eventsOn = (d) => S.events.filter((e) => e.date === d);
   const pendingPolls = () => S.polls.filter((p) => p.status === 'open' && !p.responders.some((r) => r.userId === S.me.id));
+  // Calendar events with pitch-in (not created from a scheduling poll) also appear on the Polls tab as food-only sign-ups
+  const foodPolls = () => S.events.filter((e) => e.pitchIn && !e.pollId && e.date >= todayStr());
+  const signedUp = (e) => (e.contributions || []).some((c) => c.userId === S.me.id);
+  const pendingCount = () => pendingPolls().length + foodPolls().filter((e) => !signedUp(e)).length;
 
   // ---------- Routing ----------
   function readHash() {
@@ -192,7 +196,7 @@
     if (!S.me) { closeSheet(true); return renderAuth(); }
     if (!S.groups.length) return renderOnboarding();
     const g = curGroup();
-    const pend = pendingPolls().length;
+    const pend = pendingCount();
     const tabs = [['calendar', 'Calendar', I.cal], ['polls', 'Polls', I.poll], ['members', 'Members', I.people]];
     const idx = tabs.findIndex((t) => t[0] === S.view);
     let body = '';
@@ -313,14 +317,35 @@
         </div>
       </button>`;
     };
+    const food = foodPolls();
+    const foodCard = (e) => {
+      const flat = (e.contributions || []).flatMap((c) => c.items.map((it) => it.category));
+      const cats = BRING_CATS.map((c) => [c, flat.filter((x) => x === c).length]).filter(([, k]) => k);
+      const people = (e.contributions || []).length;
+      return `<button class="poll-card food-card" data-action="open-food" data-id="${esc(e.id)}">
+        <div class="top">
+          <div><h3>${esc(e.title)}</h3><div class="by">Food sign-up · ${esc(e.createdByName)}</div></div>
+          <span class="pills"><span class="pill purple">Pitch-in</span>${signedUp(e) ? '<span class="pill green">Signed up</span>' : '<span class="pill orange">Sign up</span>'}</span>
+        </div>
+        <div class="food-mid">
+          <div class="date-tile"><div class="m">${esc(monAbbr(e.date))}</div><div class="d">${parseYmd(e.date).getDate()}</div></div>
+          <div class="food-cats">${cats.length ? cats.map(([c, k]) => `<span class="pill">${esc(c)} · ${k}</span>`).join('') : '<span class="small muted">Nobody has signed up yet</span>'}</div>
+        </div>
+        <div class="foot">
+          <span>${flat.length} item${flat.length === 1 ? '' : 's'} from ${people} ${people === 1 ? 'person' : 'people'}</span>
+          <span>${esc(fmtShort(e.date))}${e.time ? ' · ' + fmtTime(e.time) : ''}</span>
+        </div>
+      </button>`;
+    };
     return `
       <div class="title-row">
-        <div><h1 class="large-title">Polls</h1><div class="sub">Propose dates and let everyone vote.</div></div>
+        <div><h1 class="large-title">Polls</h1><div class="sub">Pick dates together and sign up for pitch-ins.</div></div>
         <button class="btn sm" data-action="new-poll">${I.plus.replace('<svg', '<svg width="16" height="16"')} New Poll</button>
       </div>
-      ${open.length ? `<div class="poll-grid">${open.map(card).join('')}</div>` : `
+      ${open.length ? `<div class="poll-grid">${open.map(card).join('')}</div>` : food.length ? '' : `
         <div class="empty">${I.poll}<div>No open polls.</div><div class="small" style="margin-top:4px">Trying to find a date? Start a poll and let everyone vote.</div>
           <button class="btn sm tinted" data-action="new-poll">${I.plus.replace('<svg', '<svg width="15" height="15"')} New Poll</button></div>`}
+      ${food.length ? `<div class="section-title">Pitch-in sign-ups</div><div class="poll-grid">${food.map(foodCard).join('')}</div>` : ''}
       ${done.length ? `<div class="section-title">Scheduled</div><div class="poll-grid">${done.map(card).join('')}</div>` : ''}`;
   }
   function score(o) { return o.votes.reduce((s, v) => s + (v.answer === 'yes' ? 2 : v.answer === 'maybe' ? 1 : 0), 0); }
@@ -1035,6 +1060,13 @@
       if (f.querySelectorAll('.bring-row').length <= 1) return;
       el.closest('.bring-row').remove();
       f.querySelectorAll('.bring-row .opt-remove').forEach((b) => { b.disabled = f.querySelectorAll('.bring-row').length <= 1; });
+    },
+    'open-food': (el) => {
+      openSheet('event', { id: el.dataset.id });
+      setTimeout(() => {
+        const label = [...$sheetRoot.querySelectorAll('.group-label')].find((x) => x.textContent.startsWith('Pitch-in'));
+        if (label) label.scrollIntoView({ block: 'start', behavior: 'smooth' });
+      }, 350);
     },
     'member-actions': (el) => openSheet('member', { id: el.dataset.id }),
     'copy-contact': async (el) => {

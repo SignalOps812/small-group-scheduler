@@ -516,3 +516,5 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .bring-row { gap: 10px; }
 .bring-row input[name="item"] { flex: 1 1 auto; min-width: 0; }
 .bring-row .bring-select { flex: 0 0 auto; max-width: 42%; }
+.food-mid { display: flex; align-items: center; gap: 12px; }
+.food-cats { display: flex; flex-wrap: wrap; gap: 6px; }
