@@ -301,6 +301,17 @@ function notifyNewPoll(ctx, group, poll, byName) {
     `${byName} created a poll: "${poll.title}". Vote here: ${link}`);
 }
 
+function notifyNewPrayer(ctx, group, pr, byName) {
+  const link = deepLink(group.id, `prayer/${pr.id}`);
+  return notifyGroup(ctx, group,
+    `Prayer request: ${pr.title}`,
+    `Prayer request: ${esc(pr.title)}`,
+    `<p style="margin:0 0 8px">${esc(byName)} shared a prayer request with the group.</p>` +
+      (pr.description ? `<p style="margin:0 0 8px;white-space:pre-line">${esc(pr.description)}</p>` : ''),
+    'Open request', link,
+    `${byName} shared a prayer request: "${pr.title}"${pr.description ? '\n\n' + pr.description : ''}\n\n${link}`);
+}
+
 // ---------- Data shaping ----------
 async function nameMap(gid) {
   const ids = (await keys(`g/${gid}/members/`)).map((k) => k.split('/').pop());
@@ -594,11 +605,12 @@ route('GET', '/groups/:gid/prayers', async ({ req, params }) => {
   return { prayers: await Promise.all(list.map((p) => prayerOut(m.group.id, p, names))) };
 });
 
-route('POST', '/groups/:gid/prayers', async ({ req, body, params }) => {
+route('POST', '/groups/:gid/prayers', async ({ req, body, params, ctx }) => {
   const m = await requireMember(req, params.gid); requireFeature(m, 'prayer');
   const t = now();
   const p = { id: newId(), ...readPrayerBody(body), createdBy: m.user.id, createdAt: t, lastActivity: t };
   await put(`g/${m.group.id}/prayer/${p.id}`, p);
+  await notifyNewPrayer(ctx, m.group, p, m.user.name);
   return { prayer: await prayerOut(m.group.id, p, await nameMap(m.group.id)) };
 });
 

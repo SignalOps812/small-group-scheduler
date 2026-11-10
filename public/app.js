@@ -842,7 +842,7 @@
             <div class="row"><input name="title" placeholder="Title" maxlength="120" value="${esc(p.title)}" aria-label="Title" required></div>
             <div class="row stack"><textarea name="description" placeholder="What would you like prayer for?" maxlength="4000" aria-label="Description">${esc(p.description)}</textarea></div>
           </div>
-          <p class="group-foot">Everyone in ${esc(curGroup().name)} can see this and add comments. You can post updates as comments later.</p>
+          <p class="group-foot">Everyone in ${esc(curGroup().name)} can see this and add comments.${s.id ? '' : ' The group will get an email about it; comments and updates don\u2019t send emails.'}</p>
           <div id="sheet-msg"></div>
         </div></form>`;
     }
@@ -908,7 +908,7 @@
           <p class="group-foot">Your email and mobile number are visible to members of your groups. Leave mobile blank to keep it private.</p>
           <div class="group-label" style="margin-top:22px">Notifications</div>
           <div class="group">
-            <div class="row"><span>Email me about new events and polls</span><label class="switch"><input type="checkbox" name="notify" data-action="toggle-notify" ${m.notify ? 'checked' : ''}><span></span></label></div>
+            <div class="row"><span>Email me about new events, polls and prayer requests</span><label class="switch"><input type="checkbox" name="notify" data-action="toggle-notify" ${m.notify ? 'checked' : ''}><span></span></label></div>
           </div>
           <div class="group" style="margin-top:22px"><div class="row danger-row" data-action="logout" role="button" tabindex="0">Sign Out</div></div>
           <div id="sheet-msg"></div>
