@@ -95,8 +95,8 @@
   const canModify = (ownerId) => S.me && (isOrganizer() || S.me.id === ownerId);
   const feat = (f) => { const g = curGroup(); return !!(g && (g.features || { members: true, prayer: false })[f]); };
   // Members tab stays visible to organizers even when hidden from everyone else
-  const showTab = (k) => k === 'prayer' ? feat('prayer') : k === 'members' ? feat('members') || isOrganizer() : true;
-  const tabList = () => [['calendar', 'Calendar', I.cal], ['polls', 'Polls', I.poll], ['prayer', 'Prayer', I.pray], ['members', 'Members', I.people]].filter(([k]) => showTab(k));
+  const showTab = (k) => k === 'prayer' ? feat('prayer') : k === 'meals' ? feat('meals') : k === 'members' ? feat('members') || isOrganizer() : true;
+  const tabList = () => [['calendar', 'Calendar', I.cal], ['polls', 'Polls', I.poll], ['prayer', 'Prayer', I.pray], ['meals', 'Meals', I.meal], ['members', 'Members', I.people]].filter(([k]) => showTab(k));
   const gp = (path = '') => `/groups/${encodeURIComponent(S.gid)}${path}`;
   const store = {
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -118,6 +118,8 @@
     mail: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M4 7l8 6 8-6"/></svg>',
     more: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="6" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="18" cy="12" r="1.8"/></svg>',
     info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="7.8" r=".6" fill="currentColor"/></svg>',
+    meal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13h18a9 9 0 0 1-18 0z"/><path d="M8 9c0-1.5 1-2 1-3.5M12 9c0-1.5 1-2 1-3.5M16 9c0-1.5 1-2 1-3.5"/></svg>',
+    share: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3M8 7l4-4 4 4"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></svg>',
     pray: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20.5s-7.5-4.4-7.5-10A4.3 4.3 0 0 1 12 7.6a4.3 4.3 0 0 1 7.5 2.9c0 5.6-7.5 10-7.5 10z"/></svg>',
     key: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3M14 9l2 2"/></svg>',
     minus: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10" fill="var(--red)"/><path d="M7.5 12h9" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></svg>',
@@ -165,10 +167,11 @@
   async function loadAll() {
     if (!S.gid) return;
     const gid = S.gid;
-    const [e, p, m, pr] = await Promise.all([api('GET', gp('/events')), api('GET', gp('/polls')), api('GET', gp('/members')),
-      feat('prayer') ? api('GET', gp('/prayers')) : Promise.resolve({ prayers: [] })]);
+    const [e, p, m, pr, mt] = await Promise.all([api('GET', gp('/events')), api('GET', gp('/polls')), api('GET', gp('/members')),
+      feat('prayer') ? api('GET', gp('/prayers')) : Promise.resolve({ prayers: [] }),
+      feat('meals') ? api('GET', gp('/meals')) : Promise.resolve({ trains: [] })]);
     if (gid !== S.gid) return; // switched groups mid-load
-    S.events = e.events; S.polls = p.polls; S.members = m.members; S.prayers = pr.prayers; S.loaded = true;
+    S.events = e.events; S.polls = p.polls; S.members = m.members; S.prayers = pr.prayers; S.trains = mt.trains; S.loaded = true;
   }
   const eventsOn = (d) => S.events.filter((e) => e.date === d);
   const pendingPolls = () => S.polls.filter((p) => p.status === 'open' && !p.responders.some((r) => r.userId === S.me.id));
@@ -181,7 +184,8 @@
   function readHash() {
     const [view, arg] = location.hash.replace(/^#\/?/, '').split('/');
     if (view === 'reset' && arg) { S.resetToken = arg; S.authMode = 'reset'; return; }
-    if (['calendar', 'polls', 'members', 'prayer'].includes(view)) S.view = view;
+    if (['calendar', 'polls', 'members', 'prayer', 'meals'].includes(view)) S.view = view;
+    if (view === 'meals' && arg) S.pendingTrain = arg;
     if (view === 'prayer' && arg) S.pendingPrayer = arg;
     if (view === 'calendar' && arg && /^\d{4}-\d{2}-\d{2}$/.test(arg)) { S.selected = arg; const d = parseYmd(arg); S.month = new Date(d.getFullYear(), d.getMonth(), 1); }
     if (view === 'polls' && arg) S.pendingPoll = arg;
@@ -274,6 +278,7 @@
     else if (S.view === 'calendar') body = renderCalendar();
     else if (S.view === 'polls') body = renderPolls();
     else if (S.view === 'prayer') body = renderPrayer();
+    else if (S.view === 'meals') body = renderMeals();
     else body = renderMembers();
     $app.innerHTML = `
       <header class="topbar">
@@ -312,6 +317,7 @@
       { el: () => document.querySelector('.title-row [data-action="new-event"]'), view: 'calendar', title: 'Add an event', text: 'Add a title, date, time, place and cost. Turn on <b>Pitch-in</b> to let people sign up for what they\u2019re bringing. The group gets an email about it.' },
       { el: () => tabEl('polls'), view: 'polls', title: 'Polls', text: 'Can\u2019t agree on a date? Start a poll with a few options and everyone marks <b>Yes</b>, <b>Maybe</b> or <b>No</b>. Polls waiting on you show a red badge and sit at the top.' },
     ];
+    if (showTab('meals')) steps.push({ el: () => tabEl('meals'), view: 'meals', title: 'Meal Trains', text: 'When a family needs support, start a meal train and share its link. Anyone can sign up for a day, even without an account, and gets the address and a reminder by email.' });
     if (showTab('prayer')) steps.push({ el: () => tabEl('prayer'), view: 'prayer', title: 'Prayer Requests', text: 'Share a request with the group, and post updates as things change. Everyone can comment to offer encouragement.' });
     if (showTab('members')) steps.push({ el: () => tabEl('members'), view: 'members', title: 'Members', text: `See who\u2019s in the group and tap anyone to call, text or email them.${feat('members') ? '' : ' (This tab is hidden from regular members right now.)'}` });
     steps.push(
@@ -632,6 +638,43 @@
       </div></div>`;
   }
 
+  // ---------- Meal trains ----------
+  const WD = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const trainUpcoming = (t) => t.dates.filter((d) => d >= todayStr());
+  const trainCovered = (t, dates) => dates.filter((d) => t.slots.some((s) => s.date === d)).length;
+  const trainRange = (t) => `${fmtShort(t.start)} – ${fmtShort(t.end)}`;
+  const trainDrop = (t, date) => !t.dropStart ? '' : `${fmtWhenTime({ date, time: t.dropStart, tz: t.tz })}${t.dropEnd ? ' – ' + fmtWhenTime({ date, time: t.dropEnd, tz: t.tz }) : ''}`;
+  function renderMeals() {
+    const list = S.trains || [];
+    const card = (t) => {
+      const up = trainUpcoming(t), cov = trainCovered(t, up), mine = t.slots.filter((s) => s.mine && s.date >= todayStr());
+      return `<button class="card train-card" data-action="open-train" data-id="${esc(t.id)}">
+        <h3>${esc(t.title)}</h3>
+        <div class="sub">${esc(trainRange(t))}${t.status === 'closed' ? ' · Sign-ups closed' : ''}</div>
+        ${up.length ? `<div class="progress" aria-hidden="true"><i style="width:${Math.round((cov / up.length) * 100)}%"></i></div>
+        <div class="foot"><span>${cov} of ${up.length} meals covered</span><span>${mine.length ? `You: ${esc(fmtShort(mine[0].date))}` : up.length - cov ? `${up.length - cov} open` : 'All covered'}</span></div>`
+        : '<div class="foot" style="margin-top:8px"><span>Finished</span></div>'}
+      </button>`;
+    };
+    const active = list.filter((t) => trainUpcoming(t).length), done = list.filter((t) => !trainUpcoming(t).length);
+    return `
+      <div class="title-row">
+        <div><h1 class="large-title">Meals</h1><div class="sub">Meal trains for families who need a hand.</div></div>
+        <button class="btn sm" data-action="new-train">${I.plus.replace('<svg', '<svg width="16" height="16"')} New Meal Train</button>
+      </div>
+      <div style="max-width:720px">
+        ${active.length ? `<div class="train-list">${active.map(card).join('')}</div>`
+          : `<div class="empty">${I.meal}<div>No meal trains right now.</div><div class="small" style="margin-top:4px">Start one when someone has a baby, surgery or a hard season. Share the link with anyone.</div>
+              <button class="btn sm" style="margin-top:14px" data-action="new-train">New Meal Train</button></div>`}
+        ${done.length ? `<h2 class="section-title" style="margin-top:28px">Finished</h2><div class="train-list">${done.map(card).join('')}</div>` : ''}
+      </div>`;
+  }
+  async function shareTrain(t) {
+    const text = `Help bring meals to ${t.recipient}! Pick a day here:`;
+    if (navigator.share) { try { await navigator.share({ title: t.title, text, url: t.publicUrl }); return; } catch (ex) { if (ex?.name === 'AbortError') return; } }
+    toast((await copyText(`${text} ${t.publicUrl}`)) ? 'Link copied — paste it in a text, email or post' : 'Couldn\u2019t copy the link');
+  }
+
   // ---------- Onboarding (no groups yet) ----------
   function renderOnboarding() {
     closeSheet(true);
@@ -713,7 +756,7 @@
   async function switchGroup(gid) {
     closeMenu(); closeSheet(true);
     S.gid = gid; store.set('sg_group', gid);
-    S.loaded = false; S.events = []; S.polls = []; S.members = [];
+    S.loaded = false; S.events = []; S.polls = []; S.members = []; S.trains = []; S.prayers = [];
     render();
     await loadAll();
     render();
@@ -784,7 +827,7 @@
   }
   function refreshSheet() {
     const sheet = $sheetRoot.querySelector('.sheet');
-    if (!sheet || !S.sheet || ['event-form', 'poll-form', 'group-new', 'group-join', 'group-edit', 'profile', 'prayer-form'].includes(S.sheet.kind)) return;
+    if (!sheet || !S.sheet || ['event-form', 'poll-form', 'group-new', 'group-join', 'group-edit', 'profile', 'prayer-form', 'meal-form', 'meal-signup'].includes(S.sheet.kind)) return;
     const body = sheet.querySelector('.sheet-body'), top = body ? body.scrollTop : 0;
     const html = sheetHtml();
     if (!html) return closeSheet();
@@ -797,6 +840,7 @@
     document.body.style.overflow = '';
     if (S.view === 'polls' && /^#polls\/./.test(location.hash)) history.replaceState(null, '', '#polls');
     if (S.view === 'prayer' && /^#prayer\/./.test(location.hash)) history.replaceState(null, '', '#prayer');
+    if (S.view === 'meals' && /^#meals\/./.test(location.hash)) history.replaceState(null, '', '#meals');
     if (!bd) return;
     if (instant) { $sheetRoot.innerHTML = ''; return; }
     bd.classList.add('closing');
@@ -981,6 +1025,7 @@
           <div class="group">
             ${sw('members', 'Members Tab', 'Everyone can see the member list and contact info')}
             ${sw('prayer', 'Prayer Requests', 'Members share requests and post comments and updates')}
+            ${sw('meals', 'Meal Trains', 'Organize meals for a family, with a sign-up link anyone can use')}
           </div>
           <p class="group-foot">Changes apply to everyone in ${esc(g.name)} right away. When the Members tab is off, organizers still see it and member contact info is hidden from everyone else. Turning off Prayer Requests hides them but keeps them, so they come back if you turn it on again.</p>
         </div>`;
@@ -1003,6 +1048,8 @@
             ${sw('prayer', 'New requests', 'When someone shares a prayer request')}
             ${sw('prayerComment', 'Comments &amp; updates', 'Every new comment or update on a request')}
           </div>
+          <div class="group-label" style="margin-top:22px">Meal Trains</div>
+          <div class="group">${sw('meal', 'New meal trains', 'When someone starts a meal train')}</div>
           ${prayerOff ? '<p class="group-foot">Prayer Requests is turned off for this group, so these won\u2019t send until you turn it on in Features.</p>' : ''}
           <p class="group-foot">These control which emails go to everyone in ${esc(g.name)}. Each person can also choose which of these they get from their own profile. Password reset emails always send.</p>
         </div>`;
@@ -1042,6 +1089,119 @@
             <button class="btn tinted block" data-action="edit-prayer" data-id="${esc(p.id)}">Edit Request</button>
             <button class="btn danger block" data-action="delete-prayer" data-id="${esc(p.id)}">Delete Request</button></div>` : ''}
         </div>`;
+    }
+    if (s.kind === 'meal-form') {
+      const t = s.id ? (S.trains || []).find((x) => x.id === s.id) : null;
+      const d = t || { recipient: '', title: '', note: '', start: todayStr(), end: ymd(new Date(Date.now() + 13 * 864e5)), days: [0, 1, 2, 3, 4, 5, 6], dropStart: '17:00', dropEnd: '18:30', tz: '', headcount: '', dietary: '', instructions: '', address: '', contactPhone: '', showDishes: true, coordinators: [S.me.id] };
+      if (s.id && !t) return '';
+      return `<form autocomplete="off" novalidate>${head(t ? 'Edit Meal Train' : 'New Meal Train', 'Cancel', t ? 'Save' : 'Create')}
+        <div class="sheet-body">
+          <div class="group">
+            <div class="row"><input name="recipient" placeholder="Who are the meals for? (e.g. The Johnson family)" maxlength="100" value="${esc(d.recipient)}" aria-label="Who are the meals for" required></div>
+            <div class="row stack"><textarea name="note" placeholder="Share what\u2019s going on and how people can help (shown on the sign-up page)" maxlength="2000" aria-label="Note">${esc(d.note)}</textarea></div>
+          </div>
+          <div class="group-label" style="margin-top:22px">Dates</div>
+          <div class="group">
+            <div class="row"><label for="mt-start">Starts</label><input id="mt-start" name="start" type="date" value="${esc(d.start)}" required></div>
+            <div class="row"><label for="mt-end">Ends</label><input id="mt-end" name="end" type="date" value="${esc(d.end)}" required></div>
+            <div class="row stack"><div class="weekday-chips" role="group" aria-label="Days that need a meal">${WD.map((w, i) => `<label><input type="checkbox" name="day" value="${i}" ${d.days.includes(i) ? 'checked' : ''}><span>${w}</span></label>`).join('')}</div></div>
+          </div>
+          <p class="group-foot">One meal for each selected day between the start and end dates.</p>
+          <div class="group-label" style="margin-top:22px">Drop-off</div>
+          <div class="group">
+            <div class="row"><label>From</label>${timePicker('ds', d.dropStart, 'Drop-off from')}</div>
+            <div class="row"><label>Until</label>${timePicker('de', d.dropEnd, 'Drop-off until')}</div>
+            <div class="row"><label for="mt-tz">Time zone</label>${tzSelect('tz', d.tz).replace('<select', '<select id="mt-tz"')}</div>
+            <div class="row"><input name="instructions" placeholder="Drop-off instructions (e.g. cooler on the porch)" maxlength="1000" value="${esc(d.instructions)}" aria-label="Drop-off instructions"></div>
+          </div>
+          <div class="group-label" style="margin-top:22px">The Family</div>
+          <div class="group">
+            <div class="row"><input name="headcount" placeholder="How many to feed (e.g. 2 adults, 3 kids)" maxlength="120" value="${esc(d.headcount)}" aria-label="How many to feed"></div>
+            <div class="row"><input name="dietary" placeholder="Allergies, likes & dislikes" maxlength="1000" value="${esc(d.dietary)}" aria-label="Allergies, likes and dislikes"></div>
+          </div>
+          <div class="group-label" style="margin-top:22px">Private</div>
+          <div class="group">
+            <div class="row"><input name="address" placeholder="Delivery address" maxlength="300" value="${esc(d.address)}" aria-label="Delivery address" autocomplete="off"></div>
+            <div class="row"><input name="contactPhone" type="tel" placeholder="Family\u2019s phone (optional)" maxlength="40" value="${esc(d.contactPhone)}" aria-label="Family's phone"></div>
+          </div>
+          <p class="group-foot">Only shown to people after they sign up, and to coordinators. Never on the public page.</p>
+          <div class="group" style="margin-top:22px">
+            <div class="row"><span>Show what people are bringing<small class="row-sub">Helps avoid three lasagnas in a row</small></span><label class="switch"><input type="checkbox" name="showDishes" ${d.showDishes !== false ? 'checked' : ''}><span></span></label></div>
+          </div>
+          <div class="group-label" style="margin-top:22px">Coordinators</div>
+          <div class="group coord-list">${S.members.map((m) => `<label class="row"><input type="checkbox" name="coord" value="${esc(m.id)}" ${(d.coordinators || []).includes(m.id) ? 'checked' : ''}><span style="flex:1">${esc(m.name)}${m.id === S.me.id ? ' <span class="muted">(you)</span>' : ''}</span></label>`).join('')}</div>
+          <p class="group-foot">Coordinators get an email when someone signs up or cancels, can see volunteers\u2019 contact info, and can edit the meal train. Group organizers can always manage it.</p>
+          <div id="sheet-msg"></div>
+        </div></form>`;
+    }
+    if (s.kind === 'meal') {
+      const t = (S.trains || []).find((x) => x.id === s.id);
+      if (!t) return '';
+      const today = todayStr(), up = trainUpcoming(t), cov = trainCovered(t, up), open = t.status === 'open';
+      const slotOn = (d) => t.slots.find((x) => x.date === d);
+      const kv = [['Dates', trainRange(t)], ['Drop-off', trainDrop(t, up[0] || t.start)], ['Serving', t.headcount], ['Food notes', t.dietary], ['Instructions', t.instructions], ['Address', t.address], ['Family\u2019s phone', t.contactPhone]].filter(([, v]) => v);
+      const showPast = !!s.showPast, dates = showPast ? t.dates : up;
+      return `${head('Meal Train', 'Done')}
+        <div class="sheet-body">
+          <div class="detail-hero">
+            <div class="mt-icon">${I.meal}</div>
+            <h2 style="margin-top:12px">${esc(t.title)}</h2>
+            <div class="w">${up.length ? `${cov} of ${up.length} meals covered` : 'Finished'}${!open ? ' · Sign-ups closed' : ''}</div>
+            ${up.length ? `<div class="progress mt-progress" aria-hidden="true"><i style="width:${Math.round((cov / up.length) * 100)}%"></i></div>` : ''}
+          </div>
+          <div class="group-label">Sign-up link</div>
+          <div class="group">
+            <div class="share-box"><code>${esc(t.publicUrl)}</code><button class="btn sm" data-action="share-train" data-id="${esc(t.id)}">${I.share.replace('<svg', '<svg width="15" height="15"')} Share</button></div>
+          </div>
+          <p class="group-foot">Anyone with this link can sign up \u2014 no account needed. <a class="link" href="${esc(t.publicUrl)}" target="_blank" rel="noopener">Preview the page</a></p>
+          ${t.note ? `<div class="group" style="margin-top:22px"><div class="detail-desc">${esc(t.note)}</div></div>` : ''}
+          <div class="group kv" style="margin-top:22px">${kv.map(([k, v]) => `<div class="row"><span>${k}</span><span class="v" style="white-space:pre-line">${k === 'Address' ? `<a class="link" target="_blank" rel="noopener" href="https://maps.apple.com/?q=${encodeURIComponent(v)}">${esc(v)}</a>` : esc(v)}</span></div>`).join('')}</div>
+          ${!t.address && !t.canManage ? '<p class="group-foot">The address shows here once you sign up.</p>' : ''}
+          <div class="group-label" style="margin-top:22px">${showPast ? 'All dates' : 'Upcoming dates'}</div>
+          <div class="group mt-dates">
+            ${dates.length ? dates.map((d) => {
+              const sl = slotOn(d), past = d < today;
+              const who = sl ? `${esc(sl.name)}${sl.mine ? ' <span class="muted">(you)</span>' : ''}${sl.dish ? ' · ' + esc(sl.dish) : ''}` : (t.dropStart ? esc(trainDrop(t, d)) : 'Open');
+              const contact = sl && (sl.email || sl.phone) && !sl.mine ? `<small class="mt-contact">${[sl.phone && `<a class="link" href="tel:${esc(sl.phone)}">${esc(fmtPhone(sl.phone) || sl.phone)}</a>`, sl.email && `<a class="link" href="mailto:${esc(sl.email)}">${esc(sl.email)}</a>`].filter(Boolean).join(' · ')}${sl.member ? '' : ' · via link'}</small>` : '';
+              const noteLine = sl && sl.note && (t.canManage || sl.mine) ? `<small class="mt-contact">\u201c${esc(sl.note)}\u201d</small>` : '';
+              let act = '';
+              if (sl && sl.mine && !past) act = `<button class="btn sm tinted" data-action="edit-my-slot" data-id="${esc(t.id)}" data-date="${d}">Change</button>`;
+              else if (sl && t.canManage && !past) act = `<button class="btn sm danger" data-action="remove-slot" data-id="${esc(t.id)}" data-date="${d}">Remove</button>`;
+              else if (sl) act = `<span class="pill green">Covered</span>`;
+              else if (!past && open) act = `<button class="btn sm" data-action="train-signup" data-id="${esc(t.id)}" data-date="${d}">Sign Up</button>`;
+              else act = `<span class="pill">${past ? 'Past' : 'Open'}</span>`;
+              return `<div class="row mt-date${sl?.mine ? ' mine' : ''}${past ? ' past' : ''}">${`<div class="date-tile"><div class="m">${esc(monAbbr(d))}</div><div class="d">${parseYmd(d).getDate()}</div></div>`}
+                <div class="mt-date-text"><b>${esc(parseYmd(d).toLocaleDateString(undefined, { weekday: 'long' }))}</b><small>${who}</small>${contact}${noteLine}</div>${act}</div>`;
+            }).join('') : '<div class="empty small" style="padding:18px;box-shadow:none">No upcoming dates.</div>'}
+          </div>
+          ${t.dates.length !== up.length ? `<p class="group-foot"><button class="link-btn" data-action="toggle-past" data-id="${esc(t.id)}">${showPast ? 'Hide past dates' : `Show ${t.dates.length - up.length} past date${t.dates.length - up.length === 1 ? '' : 's'}`}</button></p>` : ''}
+          ${t.canManage ? `<div class="actions">
+            <button class="btn tinted block" data-action="edit-train" data-id="${esc(t.id)}">Edit Meal Train</button>
+            <button class="btn tinted block" data-action="train-status" data-id="${esc(t.id)}">${open ? 'Close Sign-ups' : 'Reopen Sign-ups'}</button>
+            <button class="btn tinted block" data-action="train-new-link" data-id="${esc(t.id)}">Make a New Link</button>
+            <button class="btn danger block" data-action="delete-train" data-id="${esc(t.id)}">Delete Meal Train</button>
+          </div>
+          <p class="group-foot">A new link stops the old one from working. Existing sign-ups and their change links keep working.</p>` : ''}
+        </div>`;
+    }
+    if (s.kind === 'meal-signup') {
+      const t = (S.trains || []).find((x) => x.id === s.id);
+      if (!t) return '';
+      const mine = s.edit ? t.slots.find((x) => x.mine && x.date === s.date) : null;
+      const opts = t.dates.filter((d) => d >= todayStr() && (!t.slots.some((x) => x.date === d) || d === mine?.date));
+      return `<form autocomplete="off" novalidate>${head(mine ? 'Your Meal' : 'Sign Up', 'Cancel', mine ? 'Save' : 'Sign Up')}
+        <div class="sheet-body">
+          <div class="group"><div class="row"><label for="ms-date">Date</label><select id="ms-date" name="date" class="tz-select">${opts.map((d) => `<option value="${d}"${d === s.date ? ' selected' : ''}>${esc(fmtLong(d))}</option>`).join('')}</select></div></div>
+          ${t.dropStart ? `<p class="group-foot">Drop off ${esc(trainDrop(t, s.date))}.</p>` : ''}
+          <div class="group" style="margin-top:18px">
+            <div class="row"><input name="dish" placeholder="What you\u2019re bringing" maxlength="160" value="${esc(mine?.dish || '')}" aria-label="What you're bringing" required></div>
+            <div class="row stack"><textarea name="note" placeholder="Note for the family or coordinator (optional)" maxlength="500" aria-label="Note">${esc(mine?.note || '')}</textarea></div>
+          </div>
+          ${t.dietary ? `<p class="group-foot"><b>Food notes:</b> ${esc(t.dietary)}</p>` : ''}
+          <p class="group-foot">${mine ? '' : `You\u2019ll get the address and details by email at ${esc(S.me.email)}, and a reminder the day before.`}</p>
+          ${mine ? `<div class="group" style="margin-top:22px"><div class="row danger-row" data-action="cancel-my-slot" data-id="${esc(t.id)}" data-date="${esc(mine.date)}" role="button" tabindex="0">Cancel My Sign-up</div></div>` : ''}
+          <div id="sheet-msg"></div>
+        </div></form>`;
     }
     if (s.kind === 'member') {
       const m = S.members.find((x) => x.id === s.id);
@@ -1086,7 +1246,8 @@
           </div>
           <div class="group notify-types${m.notify ? '' : ' is-off'}" style="margin-top:12px">
             ${[['event', 'New events'], ['scheduled', 'Poll results', 'When a poll\u2019s final date is scheduled'], ['poll', 'New polls'],
-              ...(S.groups.some((g) => g.features?.prayer) ? [['prayer', 'New prayer requests'], ['prayerComment', 'Prayer comments & updates']] : [])]
+              ...(S.groups.some((g) => g.features?.prayer) ? [['prayer', 'New prayer requests'], ['prayerComment', 'Prayer comments & updates']] : []),
+              ...(S.groups.some((g) => g.features?.meals) ? [['meal', 'New meal trains']] : [])]
               .map(([k, label, sub]) => `<div class="row"><span>${esc(label)}${sub ? `<small class="row-sub">${sub}</small>` : ''}</span><label class="switch"><input type="checkbox" data-action="toggle-pref" data-key="${k}" ${(m.notifyPrefs || {})[k] !== false ? 'checked' : ''} ${m.notify ? '' : 'disabled'}><span></span></label></div>`).join('')}
           </div>
           <p class="group-foot">Choose which emails you get. Group organizers can also turn some emails off for everyone in a group.</p>
@@ -1098,6 +1259,11 @@
     return '';
   }
 
+  function upsertTrain(t) {
+    S.trains = S.trains || [];
+    const i = S.trains.findIndex((x) => x.id === t.id);
+    if (i >= 0) S.trains[i] = t; else S.trains.unshift(t);
+  }
   function upsertPrayer(p) {
     S.prayers = S.prayers || [];
     const i = S.prayers.findIndex((x) => x.id === p.id);
@@ -1139,6 +1305,24 @@
         S.view = 'polls'; render();
         openSheet('poll', { id: r.poll.id }); history.replaceState(null, '', '#polls/' + r.poll.id);
         toast(s.id ? 'Poll updated' : 'Poll created · Group notified');
+      } else if (s.kind === 'meal-form') {
+        const days = [...form.querySelectorAll('[name="day"]:checked')].map((x) => Number(x.value));
+        const coordinators = [...form.querySelectorAll('[name="coord"]:checked')].map((x) => x.value);
+        if (!v.recipient.trim()) { btn.disabled = false; return err('Who are the meals for?'); }
+        if (!days.length) { btn.disabled = false; return err('Pick at least one day of the week.'); }
+        const dropStart = readTime(form, 'ds'), dropEnd = readTime(form, 'de');
+        const body = { recipient: v.recipient, note: v.note, start: v.start, end: v.end, days, dropStart, dropEnd, tz: v.tz, instructions: v.instructions, headcount: v.headcount, dietary: v.dietary, address: v.address, contactPhone: v.contactPhone, showDishes: !!form.elements.showDishes?.checked, coordinators };
+        const r = s.id ? await api('PUT', gp(`/meals/${s.id}`), body) : await api('POST', gp('/meals'), body);
+        await loadAll(); S.view = 'meals'; render();
+        openSheet('meal', { id: r.train.id }); history.replaceState(null, '', '#meals/' + r.train.id);
+        toast(s.id ? 'Meal train updated' : 'Meal train created · Share the link to get sign-ups');
+      } else if (s.kind === 'meal-signup') {
+        if (!v.dish.trim()) { btn.disabled = false; return err('What are you planning to bring? (\u201cNot sure yet\u201d is fine.)'); }
+        const editing = s.edit;
+        const r = editing ? await api('PUT', gp(`/meals/${s.id}/slots/${s.date}`), { date: v.date, dish: v.dish, note: v.note })
+          : await api('POST', gp(`/meals/${s.id}/signup`), { date: v.date, dish: v.dish, note: v.note });
+        upsertTrain(r.train); render(); openSheet('meal', { id: s.id });
+        toast(editing ? 'Saved' : `Thank you! You\u2019re bringing a meal ${fmtShort(v.date)}`);
       } else if (s.kind === 'prayer-form') {
         if (!v.title.trim()) { btn.disabled = false; return err('Please add a title.'); }
         const body = { title: v.title, description: v.description };
@@ -1429,6 +1613,41 @@
       }, 350);
     },
     'group-features': () => openSheet('group-features'),
+    'new-train': () => openSheet('meal-form'),
+    'open-train': (el) => { openSheet('meal', { id: el.dataset.id }); history.replaceState(null, '', '#meals/' + el.dataset.id); },
+    'edit-train': (el) => openSheet('meal-form', { id: el.dataset.id }),
+    'share-train': (el) => shareTrain(S.trains.find((x) => x.id === el.dataset.id)),
+    'toggle-past': (el) => { S.sheet.showPast = !S.sheet.showPast; refreshSheet(); },
+    'train-signup': (el) => openSheet('meal-signup', { id: el.dataset.id, date: el.dataset.date }),
+    'edit-my-slot': (el) => openSheet('meal-signup', { id: el.dataset.id, date: el.dataset.date, edit: true }),
+    'cancel-my-slot': async (el) => {
+      if (!(await ask({ title: 'Cancel your sign-up?', message: `You won\u2019t be bringing a meal on ${fmtLong(el.dataset.date)}. The coordinators will be told.`, ok: 'Cancel Sign-up', destructive: true }))) return;
+      try { const r = await api('DELETE', gp(`/meals/${el.dataset.id}/slots/${el.dataset.date}`)); upsertTrain(r.train); render(); openSheet('meal', { id: el.dataset.id }); toast('Sign-up cancelled'); }
+      catch (ex) { toast(ex.message); }
+    },
+    'remove-slot': async (el) => {
+      const t = S.trains.find((x) => x.id === el.dataset.id), sl = t.slots.find((x) => x.date === el.dataset.date);
+      if (!(await ask({ title: `Remove ${sl.name}?`, message: `${sl.name} won\u2019t be bringing a meal on ${fmtLong(sl.date)}. They\u2019ll get an email letting them know.`, ok: 'Remove', destructive: true }))) return;
+      try { const r = await api('DELETE', gp(`/meals/${t.id}/slots/${sl.date}`)); upsertTrain(r.train); refreshSheet(); render(); toast('Sign-up removed'); }
+      catch (ex) { toast(ex.message); }
+    },
+    'train-status': async (el) => {
+      const t = S.trains.find((x) => x.id === el.dataset.id), closing = t.status === 'open';
+      if (closing && !(await ask({ title: 'Close sign-ups?', message: 'No one will be able to sign up until you reopen it. Existing sign-ups stay.', ok: 'Close Sign-ups' }))) return;
+      try { const r = await api('POST', gp(`/meals/${t.id}/status`), { status: closing ? 'closed' : 'open' }); upsertTrain(r.train); refreshSheet(); render(); toast(closing ? 'Sign-ups closed' : 'Sign-ups reopened'); }
+      catch (ex) { toast(ex.message); }
+    },
+    'train-new-link': async (el) => {
+      if (!(await ask({ title: 'Make a new link?', message: 'The old sign-up link will stop working. Anyone you shared it with will need the new one.', ok: 'Make New Link', destructive: true }))) return;
+      try { const r = await api('POST', gp(`/meals/${el.dataset.id}/new-link`), {}); upsertTrain(r.train); refreshSheet(); toast('New link ready'); }
+      catch (ex) { toast(ex.message); }
+    },
+    'delete-train': async (el) => {
+      const t = S.trains.find((x) => x.id === el.dataset.id), n = t.slots.filter((x) => x.date >= todayStr()).length;
+      if (!(await ask({ title: `Delete \u201c${t.title}\u201d?`, message: `The sign-up link will stop working.${n ? ` ${n} volunteer${n === 1 ? '' : 's'} with upcoming dates will get an email that it was cancelled.` : ''}`, ok: 'Delete', destructive: true }))) return;
+      try { await api('DELETE', gp(`/meals/${t.id}`)); S.trains = S.trains.filter((x) => x.id !== t.id); closeSheet(); render(); toast('Meal train deleted'); }
+      catch (ex) { toast(ex.message); }
+    },
     'group-notifications': () => openSheet('group-notifications'),
     'toggle-notification': async (el) => {
       const g = curGroup(), k = el.dataset.key, on = el.checked;
@@ -1542,6 +1761,7 @@
     const before = S.view; readHash();
     if (S.pendingPoll) { const id = S.pendingPoll; S.pendingPoll = null; if (S.view !== before) render(); if (S.polls.some((p) => p.id === id)) openSheet('poll', { id }); }
     else if (S.pendingPrayer) { const id = S.pendingPrayer; S.pendingPrayer = null; render(); if ((S.prayers || []).some((p) => p.id === id)) openSheet('prayer', { id }); }
+    else if (S.pendingTrain) { const id = S.pendingTrain; S.pendingTrain = null; render(); if ((S.trains || []).some((t) => t.id === id)) openSheet('meal', { id }); }
     else render();
   });
 
@@ -1550,7 +1770,7 @@
     if (!S.me || document.hidden) return;
     if (TOUR) return;
     if (!S.groups.length) return; // join/create screen: never redraw it, or it wipes what someone is typing
-    if (S.sheet && ['event-form', 'poll-form', 'profile', 'group-new', 'group-join', 'group-edit', 'prayer-form'].includes(S.sheet.kind)) return;
+    if (S.sheet && ['event-form', 'poll-form', 'profile', 'group-new', 'group-join', 'group-edit', 'prayer-form', 'meal-form', 'meal-signup'].includes(S.sheet.kind)) return;
     if (S.sheet?.editComment) return;
     const typing = document.querySelector('.comment-form textarea');
     if (typing && typing.value.trim()) return;
@@ -1580,6 +1800,7 @@
     render();
     if (S.pendingPoll) { const id = S.pendingPoll; S.pendingPoll = null; if (S.polls.some((p) => p.id === id)) openSheet('poll', { id }); }
     if (S.pendingPrayer) { const id = S.pendingPrayer; S.pendingPrayer = null; if ((S.prayers || []).some((p) => p.id === id)) openSheet('prayer', { id }); }
+    if (S.pendingTrain) { const id = S.pendingTrain; S.pendingTrain = null; if ((S.trains || []).some((t) => t.id === id)) openSheet('meal', { id }); }
   }
   (async () => {
     S.linkGroup = new URLSearchParams(location.search).get('g');

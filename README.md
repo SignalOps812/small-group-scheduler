@@ -55,6 +55,18 @@ Sign up, choose **Start a Group**, and pick a code. Then open **Members** (or **
 
 ---
 
+## Meal trains
+
+Organizers turn on **Meal Trains** in Group Info › Features. Any member can then start a train for a family:
+pick a date range, which weekdays need a meal, a drop-off window, food notes and the (private) address.
+
+- Each train has a public link (`/m/<token>`) anyone can use to sign up, with no account needed. The page never shows the
+  address or phone; volunteers get them on their confirmation screen and by email.
+- Volunteers get a private link (`/m/manage/<token>`) to change or cancel, plus a reminder email the day before
+  (sent by the hourly `meal-reminders` scheduled function from 9 AM in the train's time zone).
+- Coordinators get an email for each sign-up, change or cancellation, can see volunteers' contact info, remove sign-ups,
+  close sign-ups, or make a new link (which turns the old one off).
+
 ## Notes
 - **Free Netlify plan:** fine for a small group. Every page load makes a few quick function calls.
 - **Upgrading from the single-group version:** on first launch, existing members, events and polls move automatically into one group named after `APP_NAME`, with a generated code. The old organizer becomes its organizer, and can see and change the code under Group Info.

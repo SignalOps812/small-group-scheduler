@@ -12,6 +12,10 @@
 //   g/<gid>/events/<id>, g/<gid>/polls/<id>, g/<gid>/votes/<pollId>/<uid>, g/<gid>/emaillog/<ts>
 //   g/<gid>/prayer/<id>             { id, title, description, createdBy, createdAt, updatedAt, lastActivity }
 //   g/<gid>/prayerc/<prayerId>/<cid> { id, userId, text, at, editedAt }
+//   g/<gid>/meals/<id>              meal train { id, recipient, start, end, days, dropStart/End, tz, address, coordinators, token, status, … }
+//   g/<gid>/mealslots/<id>/<date>   { date, name, email, phone, dish, note, userId|null, manage, at, remindedAt }
+//   mtpub/<token> → { gid, mtid }   public sign-up link · mtmanage/<token> → { gid, mtid, date } volunteer's change/cancel link
+//   mtactive/<gid>/<mtid>           trains the hourly reminder job checks
 //   g/<gid>/bring/<p|e>-<id>/<uid>  { target, userId, items: [{ item, category }], at }   — pitch-in sign-ups
 import crypto from 'node:crypto';
 import { getStore } from '@netlify/blobs';
@@ -84,7 +88,7 @@ function parsePhone(v) {
   return e164;
 }
 // Each person's own email choices (all on by default); the group's settings still apply on top
-const USER_NOTIFY_KEYS = ['event', 'scheduled', 'poll', 'prayer', 'prayerComment'];
+const USER_NOTIFY_KEYS = ['event', 'scheduled', 'poll', 'prayer', 'prayerComment', 'meal'];
 const userPrefs = (u) => Object.fromEntries(USER_NOTIFY_KEYS.map((k) => [k, (u.notifyPrefs || {})[k] !== false]));
 const userOut = (u) => ({ id: u.id, name: u.name, email: u.email, phone: u.phone || '', notify: u.notify !== false, notifyPrefs: userPrefs(u), tourDone: !!u.tourDone });
 const normCode = (c) => str(c, 60).toLowerCase().replace(/\s+/g, '-');
@@ -151,13 +155,13 @@ async function requireMember(req, gid) {
 const canModify = (m, ownerId) => m.organizer || m.user.id === ownerId;
 
 // Optional features organizers can switch on/off per group
-const FEATURE_DEFAULTS = { members: true, prayer: false };
+const FEATURE_DEFAULTS = { members: true, prayer: false, meals: false };
 const featuresOf = (g) => ({ ...FEATURE_DEFAULTS, ...(g.features || {}) });
 function requireFeature(m, f) {
   if (!featuresOf(m.group)[f]) throw new HttpError(403, 'That feature is turned off for this group.');
 }
 // Which group emails go out; organizers control each type
-const NOTIFY_DEFAULTS = { event: true, scheduled: true, poll: true, prayer: true, prayerComment: false };
+const NOTIFY_DEFAULTS = { event: true, scheduled: true, poll: true, prayer: true, prayerComment: false, meal: true };
 const notifyOf = (g) => ({ ...NOTIFY_DEFAULTS, ...(g.notifications || {}) });
 async function groupSummary(gid, uid) {
   const [g, m, memberKeys] = await Promise.all([get(`groups/${gid}`), get(`g/${gid}/members/${uid}`), keys(`g/${gid}/members/`)]);
@@ -727,6 +731,338 @@ route('DELETE', '/groups/:gid/prayers/:id/comments/:cid', async ({ req, params }
   await del(key);
   return { prayer: await prayerOut(m.group.id, p, await nameMap(m.group.id)) };
 });
+
+// --- Meal trains ---
+// A train lives in a group; anyone with its public link can sign up for a date without an account.
+const MT_MAX_DAYS = 120;
+const validTok = (t) => { if (!/^[\w-]{20,64}$/.test(t || '')) throw new HttpError(404, 'This link isn’t valid. Ask the coordinator for a new one.'); return t; };
+const addDays = (date, n) => { const [y, m, d] = date.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10); };
+const weekdayOf = (date) => { const [y, m, d] = date.split('-').map(Number); return new Date(Date.UTC(y, m - 1, d)).getUTCDay(); };
+const todayIn = (tz) => { try { return new Intl.DateTimeFormat('en-CA', { timeZone: tz || 'America/New_York' }).format(new Date()); } catch { return new Date().toISOString().slice(0, 10); } };
+function trainDates(t) {
+  const out = [];
+  for (let d = t.start, i = 0; d <= t.end && i < MT_MAX_DAYS + 1; d = addDays(d, 1), i++) if (t.days.includes(weekdayOf(d))) out.push(d);
+  return out;
+}
+const forWhom = (t) => t.recipient.replace(/^The\s/, 'the '); // "a meal for the Johnson family"
+const firstName = (n) => String(n || '').trim().split(/\s+/)[0] || 'Someone';
+const mtSlotKey = (gid, id, date) => `g/${gid}/mealslots/${id}/${date}`;
+async function mtSlots(gid, id) { return (await listAll(`g/${gid}/mealslots/${id}/`)).sort((a, b) => a.date.localeCompare(b.date)); }
+const canManageTrain = (m, t) => m.organizer || (t.coordinators || []).includes(m.user.id) || t.createdBy === m.user.id;
+const dropWindow = (t, date) => !t.dropStart ? '' : `${fmtTimeTz(date, t.dropStart, t.tz)}${t.dropEnd ? ' – ' + fmtTimeTz(date, t.dropEnd, t.tz) : ''}`;
+const manageLink = (s) => `${APP_URL()}/m/manage/${s.manage}`;
+const publicLink = (t) => `${APP_URL()}/m/${t.token}`;
+
+function readTrainBody(body) {
+  const title = str(body.title, 100), recipient = str(body.recipient, 100);
+  if (!recipient) throw new HttpError(400, 'Who are the meals for?');
+  const start = str(body.start, 10), end = str(body.end, 10);
+  if (!isDate(start) || !isDate(end)) throw new HttpError(400, 'Choose a start and end date.');
+  if (end < start) throw new HttpError(400, 'The end date is before the start date.');
+  if ((Date.parse(end) - Date.parse(start)) / 864e5 > MT_MAX_DAYS) throw new HttpError(400, `A meal train can run up to ${MT_MAX_DAYS} days.`);
+  const days = [...new Set((Array.isArray(body.days) ? body.days : []).map(Number).filter((d) => Number.isInteger(d) && d >= 0 && d <= 6))].sort();
+  if (!days.length) throw new HttpError(400, 'Pick at least one day of the week.');
+  const dropStart = str(body.dropStart, 5), dropEnd = str(body.dropEnd, 5);
+  if (!isTime(dropStart) || !isTime(dropEnd)) throw new HttpError(400, 'Please choose a valid drop-off time.');
+  const t = {
+    title: title || `Meals for ${recipient.replace(/^The\s/, 'the ')}`, recipient, note: str(body.note, 2000),
+    start, end, days, dropStart, dropEnd: dropStart ? dropEnd : '', tz: validTz(body.tz) || 'America/New_York',
+    headcount: str(body.headcount, 120), dietary: str(body.dietary, 1000), instructions: str(body.instructions, 1000),
+    address: str(body.address, 300), contactPhone: str(body.contactPhone, 40),
+    showDishes: body.showDishes !== false,
+    coordinators: Array.isArray(body.coordinators) ? body.coordinators.filter((x) => typeof x === 'string' && /^[\w-]{1,40}$/.test(x)).slice(0, 10) : [],
+  };
+  if (!trainDates(t).length) throw new HttpError(400, 'Those dates don’t include any of the chosen days.');
+  return t;
+}
+// What anyone with the public link may see — never the address, phone or volunteers' contact info
+function publicTrainOut(t, slots, groupName) {
+  const by = Object.fromEntries(slots.map((s) => [s.date, s]));
+  const today = todayIn(t.tz);
+  return {
+    title: t.title, recipient: t.recipient, note: t.note, groupName,
+    dropStart: t.dropStart, dropEnd: t.dropEnd, tz: t.tz, headcount: t.headcount, dietary: t.dietary, instructions: t.instructions,
+    status: t.status, showDishes: t.showDishes, hasAddress: !!t.address,
+    dates: trainDates(t).map((d) => ({ date: d, past: d < today, taken: !!by[d], name: by[d] ? firstName(by[d].name) : '', dish: by[d] && t.showDishes ? by[d].dish : '' })),
+  };
+}
+// Details a volunteer gets once they're signed up
+const volunteerDetails = (t) => ({ address: t.address, contactPhone: t.contactPhone });
+function memberTrainOut(m, t, slots) {
+  const manage = canManageTrain(m, t), mine = slots.some((s) => s.userId === m.user.id);
+  return {
+    ...t, token: t.token, canManage: manage,
+    address: manage || mine ? t.address : '', contactPhone: manage || mine ? t.contactPhone : '',
+    publicUrl: publicLink(t),
+    dates: trainDates(t),
+    slots: slots.map((s) => ({
+      date: s.date, name: s.name, dish: s.dish, mine: s.userId === m.user.id, member: !!s.userId, at: s.at,
+      ...(manage || s.userId === m.user.id ? { email: s.email, phone: s.phone || '', note: s.note || '' } : {}),
+    })),
+  };
+}
+async function getTrain(gid, id) {
+  const t = await get(`g/${gid}/meals/${validId(id)}`);
+  if (!t) throw new HttpError(404, 'Meal train not found.');
+  return t;
+}
+async function trainFromPublic(token) {
+  const ref = await get(`mtpub/${validTok(token)}`);
+  if (!ref) throw new HttpError(404, 'This meal train link isn’t active anymore. Ask the coordinator for a new one.');
+  const [t, group] = await Promise.all([get(`g/${ref.gid}/meals/${ref.mtid}`), get(`groups/${ref.gid}`)]);
+  if (!t || !group || !featuresOf(group).meals) throw new HttpError(404, 'This meal train isn’t available anymore.');
+  return { t, group };
+}
+async function slotFromManage(token) {
+  const ref = await get(`mtmanage/${validTok(token)}`);
+  if (!ref) throw new HttpError(404, 'This sign-up link isn’t valid anymore — the sign-up may have been cancelled.');
+  const [t, group, slot] = await Promise.all([get(`g/${ref.gid}/meals/${ref.mtid}`), get(`groups/${ref.gid}`), get(mtSlotKey(ref.gid, ref.mtid, ref.date))]);
+  if (!t || !group || !slot || slot.manage !== token) throw new HttpError(404, 'This sign-up isn’t active anymore.');
+  return { t, group, slot };
+}
+function readVolunteer(body, needContact) {
+  const name = str(body.name, 80), email = str(body.email, 200).toLowerCase(), phone = str(body.phone, 40), dish = str(body.dish, 160), note = str(body.note, 500);
+  if (needContact) {
+    if (!name) throw new HttpError(400, 'Please enter your name.');
+    if (!isEmail(email)) throw new HttpError(400, 'Please enter a valid email so we can send you the details.');
+  }
+  if (!dish) throw new HttpError(400, 'What are you planning to bring? (“Not sure yet” is fine.)');
+  return { name, email, phone, dish, note };
+}
+function checkDateOpen(t, date, slotTaken) {
+  if (t.status !== 'open') throw new HttpError(400, 'Sign-ups for this meal train are closed.');
+  if (!isDate(date) || !trainDates(t).includes(date)) throw new HttpError(400, 'Please choose one of the meal train’s dates.');
+  if (date < todayIn(t.tz)) throw new HttpError(400, 'That date has already passed.');
+  if (slotTaken) throw new HttpError(409, 'Someone just signed up for that date. Please pick another.');
+}
+async function createSlot(ctx, group, t, date, v, userId) {
+  checkDateOpen(t, date, await get(mtSlotKey(group.id, t.id, date)));
+  const slot = { date, ...v, userId: userId || null, manage: newToken(), at: now() };
+  await put(mtSlotKey(group.id, t.id, date), slot);
+  await put(`mtmanage/${slot.manage}`, { gid: group.id, mtid: t.id, date });
+  volunteerEmail(ctx, group, t, slot, 'confirm');
+  ctx.background(coordinatorEmail(ctx, group, t, slot, 'signup'));
+  return slot;
+}
+async function moveSlot(ctx, group, t, slot, changes) {
+  const next = { ...slot, ...changes, updatedAt: now() };
+  if (changes.date && changes.date !== slot.date) {
+    checkDateOpen(t, changes.date, await get(mtSlotKey(group.id, t.id, changes.date)));
+    next.remindedAt = null;
+    await put(mtSlotKey(group.id, t.id, next.date), next);
+    await del(mtSlotKey(group.id, t.id, slot.date));
+    await put(`mtmanage/${slot.manage}`, { gid: group.id, mtid: t.id, date: next.date });
+    volunteerEmail(ctx, group, t, next, 'moved');
+    ctx.background(coordinatorEmail(ctx, group, t, next, 'moved', slot.date));
+  } else {
+    await put(mtSlotKey(group.id, t.id, slot.date), next);
+  }
+  return next;
+}
+async function removeSlot(ctx, group, t, slot, why) { // why: 'self' | 'coordinator' | 'train'
+  await del(mtSlotKey(group.id, t.id, slot.date));
+  await del(`mtmanage/${slot.manage}`);
+  if (why !== 'self' && slot.date >= todayIn(t.tz)) volunteerEmail(ctx, group, t, slot, why === 'train' ? 'train-cancelled' : 'removed');
+  if (why === 'self') ctx.background(coordinatorEmail(ctx, group, t, slot, 'cancel'));
+}
+
+// ---- Meal train emails ----
+function mealDetailsHtml(t, slot, withAddress) {
+  return detailRows([
+    ['When', `${fmtDate(slot.date)}${t.dropStart ? '\n' + dropWindow(t, slot.date) : ''}`],
+    ['Where', withAddress ? t.address : ''], ['Contact', withAddress ? t.contactPhone : ''],
+    ['Bringing', slot.dish], ['Serving', t.headcount], ['Food notes', t.dietary], ['Drop-off', t.instructions],
+  ]);
+}
+function volunteerEmail(ctx, group, t, slot, kind) {
+  if (!slot.email) return;
+  const when = fmtDate(slot.date);
+  const subj = {
+    confirm: `You’re signed up: meal for ${forWhom(t)} on ${when}`,
+    moved: `Updated: meal for ${forWhom(t)} on ${when}`,
+    remind: `Reminder: your meal for ${forWhom(t)} is tomorrow`,
+    removed: `Your meal sign-up for ${when} was cancelled`,
+    'train-cancelled': `Meal train for ${forWhom(t)} was cancelled`,
+  }[kind];
+  const gone = kind === 'removed' || kind === 'train-cancelled';
+  const intro = {
+    confirm: `Thank you, ${esc(firstName(slot.name))}! You’re bringing a meal to <b>${esc(forWhom(t))}</b>. Here are the details:`,
+    moved: `Your sign-up moved to <b>${esc(when)}</b>. Here are the updated details:`,
+    remind: `Just a reminder that you’re bringing a meal to <b>${esc(forWhom(t))}</b> tomorrow. Thank you!`,
+    removed: `The coordinator cancelled your sign-up for <b>${esc(when)}</b> on the meal train for ${esc(forWhom(t))}. You don’t need to bring anything that day. If that’s a surprise, reach out to the coordinator.`,
+    'train-cancelled': `The meal train for <b>${esc(forWhom(t))}</b> has been cancelled, so you don’t need to bring your meal on ${esc(when)}. Thank you for signing up.`,
+  }[kind];
+  const html = emailShell(`${t.title}`, esc(subj), `<p style="margin:0 0 8px">${intro}</p>${gone ? '' : mealDetailsHtml(t, slot, true)}`,
+    gone ? 'Open meal train' : 'View or change your sign-up', gone ? publicLink(t) : manageLink(slot),
+    `You signed up through ${group.name}’s meal train on ${APP_NAME()}.`);
+  const text = `${subj}\n\n${gone ? '' : `When: ${when}${t.dropStart ? ', ' + dropWindow(t, slot.date) : ''}\n${t.address ? 'Where: ' + t.address + '\n' : ''}Bringing: ${slot.dish}\n\nChange or cancel: ${manageLink(slot)}`}`;
+  ctx.background(sendEmail({ to: slot.email, subject: subj, html, text, gid: group.id }));
+}
+async function coordinatorEmail(ctx, group, t, slot, kind, fromDate) {
+  const ids = [...new Set([t.createdBy, ...(t.coordinators || [])])];
+  const users = (await Promise.all(ids.map((id) => get(`users/${id}`)))).filter((u) => u && u.notify !== false && u.id !== slot.userId);
+  if (!users.length) return;
+  const when = fmtDate(slot.date);
+  const subj = { signup: `${slot.name} signed up for ${when}`, cancel: `${slot.name} cancelled ${when}`, moved: `${slot.name} moved to ${when}` }[kind] + ` · ${t.title}`;
+  const body = `<p style="margin:0 0 8px">${esc(slot.name)} ${kind === 'signup' ? 'signed up to bring a meal' : kind === 'cancel' ? 'cancelled their meal' : `moved their meal from ${esc(fmtDate(fromDate))}`}.</p>` +
+    detailRows([['Date', when], ['Bringing', kind === 'cancel' ? '' : slot.dish], ['Email', slot.email], ['Phone', slot.phone], ['Note', slot.note]]);
+  const html = emailShell(group.name, esc(subj.split(' · ')[0]), body, 'Open meal train', deepLink(group.id, `meals/${t.id}`), `You’re a coordinator of ${t.title}.`);
+  return sendEmail({ to: users.map((u) => u.email), subject: `[${group.name}] ${subj}`, html, text: `${subj}\n${deepLink(group.id, `meals/${t.id}`)}`, gid: group.id });
+}
+function notifyNewTrain(ctx, group, t, byName, byId) {
+  if (!notifyOf(group).meal) return;
+  const range = `${fmtDate(t.start).replace(/, \d{4}$/, '')} – ${fmtDate(t.end)}`;
+  return notifyGroup('meal', ctx, group, `Meal train: ${t.recipient}`, `Meal train for ${esc(t.recipient)}`,
+    `<p style="margin:0 0 8px">${esc(byName)} started a meal train. Pick a day to bring a meal.</p>${detailRows([['Dates', range], ['Drop-off', t.dropStart ? dropWindow(t, t.start) : ''], ['Food notes', t.dietary], ['Details', t.note]])}`,
+    'Sign up for a day', deepLink(group.id, `meals/${t.id}`),
+    `${byName} started a meal train for ${t.recipient} (${range}). Sign up: ${deepLink(group.id, `meals/${t.id}`)}`, byId);
+}
+
+// ---- Group routes ----
+route('GET', '/groups/:gid/meals', async ({ req, params }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'meals');
+  const list = await listAll(`g/${m.group.id}/meals/`);
+  const out = await Promise.all(list.map(async (t) => memberTrainOut(m, t, await mtSlots(m.group.id, t.id))));
+  out.sort((a, b) => (a.status === b.status ? b.start.localeCompare(a.start) : a.status === 'open' ? -1 : 1));
+  return { trains: out };
+});
+route('POST', '/groups/:gid/meals', async ({ req, body, params, ctx }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'meals');
+  const t = { id: newId(), ...readTrainBody(body), status: 'open', token: newToken(), createdBy: m.user.id, createdAt: now() };
+  if (!t.coordinators.includes(m.user.id)) t.coordinators.unshift(m.user.id);
+  await put(`g/${m.group.id}/meals/${t.id}`, t);
+  await put(`mtpub/${t.token}`, { gid: m.group.id, mtid: t.id });
+  await put(`mtactive/${m.group.id}/${t.id}`, { gid: m.group.id, mtid: t.id });
+  await notifyNewTrain(ctx, m.group, t, m.user.name, m.user.id);
+  return { train: memberTrainOut(m, t, []) };
+});
+route('PUT', '/groups/:gid/meals/:id', async ({ req, body, params }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'meals');
+  const t = await getTrain(m.group.id, params.id);
+  if (!canManageTrain(m, t)) throw new HttpError(403, 'Only this meal train’s coordinators or a group organizer can edit it.');
+  const next = { ...t, ...readTrainBody(body), updatedAt: now() };
+  if (!next.coordinators.length) next.coordinators = [t.createdBy];
+  const slots = await mtSlots(m.group.id, t.id), dates = new Set(trainDates(next));
+  const orphan = slots.find((s) => !dates.has(s.date));
+  if (orphan) throw new HttpError(400, `${orphan.name} is signed up for ${fmtDate(orphan.date)}. Keep that date, or remove their sign-up first.`);
+  if (typeof body.status === 'string' && ['open', 'closed'].includes(body.status)) next.status = body.status;
+  await put(`g/${m.group.id}/meals/${t.id}`, next);
+  return { train: memberTrainOut(m, next, slots) };
+});
+route('POST', '/groups/:gid/meals/:id/status', async ({ req, body, params }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'meals');
+  const t = await getTrain(m.group.id, params.id);
+  if (!canManageTrain(m, t)) throw new HttpError(403, 'Only coordinators can do that.');
+  const next = { ...t, status: body.status === 'closed' ? 'closed' : 'open', updatedAt: now() };
+  await put(`g/${m.group.id}/meals/${t.id}`, next);
+  return { train: memberTrainOut(m, next, await mtSlots(m.group.id, t.id)) };
+});
+route('POST', '/groups/:gid/meals/:id/new-link', async ({ req, params }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'meals');
+  const t = await getTrain(m.group.id, params.id);
+  if (!canManageTrain(m, t)) throw new HttpError(403, 'Only coordinators can do that.');
+  const next = { ...t, token: newToken(), updatedAt: now() };
+  await put(`mtpub/${next.token}`, { gid: m.group.id, mtid: t.id });
+  await del(`mtpub/${t.token}`);
+  await put(`g/${m.group.id}/meals/${t.id}`, next);
+  return { train: memberTrainOut(m, next, await mtSlots(m.group.id, t.id)) };
+});
+route('DELETE', '/groups/:gid/meals/:id', async ({ req, params, ctx }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'meals');
+  const t = await getTrain(m.group.id, params.id);
+  if (!canManageTrain(m, t)) throw new HttpError(403, 'Only coordinators can delete this meal train.');
+  for (const s of await mtSlots(m.group.id, t.id)) await removeSlot(ctx, m.group, t, s, 'train');
+  await Promise.all([del(`mtpub/${t.token}`), del(`mtactive/${m.group.id}/${t.id}`), del(`g/${m.group.id}/meals/${t.id}`)]);
+  return { ok: true };
+});
+// A member signs up in the app with their account details
+route('POST', '/groups/:gid/meals/:id/signup', async ({ req, body, params, ctx }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'meals');
+  const t = await getTrain(m.group.id, params.id);
+  const v = readVolunteer(body, false);
+  await createSlot(ctx, m.group, t, str(body.date, 10), { ...v, name: m.user.name, email: m.user.email, phone: m.user.phone || '' }, m.user.id);
+  return { train: memberTrainOut(m, t, await mtSlots(m.group.id, t.id)) };
+});
+route('PUT', '/groups/:gid/meals/:id/slots/:date', async ({ req, body, params, ctx }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'meals');
+  const t = await getTrain(m.group.id, params.id);
+  const slot = isDate(params.date) && await get(mtSlotKey(m.group.id, t.id, params.date));
+  if (!slot) throw new HttpError(404, 'Sign-up not found.');
+  if (slot.userId !== m.user.id) throw new HttpError(403, 'You can only change your own sign-up.');
+  const v = readVolunteer({ ...slot, ...body }, false);
+  await moveSlot(ctx, m.group, t, slot, { dish: v.dish, note: v.note, ...(body.date && body.date !== slot.date ? { date: str(body.date, 10) } : {}) });
+  return { train: memberTrainOut(m, t, await mtSlots(m.group.id, t.id)) };
+});
+route('DELETE', '/groups/:gid/meals/:id/slots/:date', async ({ req, params, ctx }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'meals');
+  const t = await getTrain(m.group.id, params.id);
+  const slot = isDate(params.date) && await get(mtSlotKey(m.group.id, t.id, params.date));
+  if (!slot) throw new HttpError(404, 'Sign-up not found.');
+  const own = slot.userId === m.user.id;
+  if (!own && !canManageTrain(m, t)) throw new HttpError(403, 'You can only cancel your own sign-up.');
+  await removeSlot(ctx, m.group, t, slot, own ? 'self' : 'coordinator');
+  return { train: memberTrainOut(m, t, await mtSlots(m.group.id, t.id)) };
+});
+
+// ---- Public routes (no account) ----
+route('GET', '/public/meals/:token', async ({ params }) => {
+  const { t, group } = await trainFromPublic(params.token);
+  return { train: publicTrainOut(t, await mtSlots(group.id, t.id), group.name) };
+});
+route('POST', '/public/meals/:token/signup', async ({ body, params, ctx }) => {
+  rateLimit('mt:' + ctx.ip, 12, 15 * 60e3);
+  if (str(body.website, 200)) throw new HttpError(400, 'Something went wrong. Please try again.'); // honeypot for bots
+  const { t, group } = await trainFromPublic(params.token);
+  const slot = await createSlot(ctx, group, t, str(body.date, 10), readVolunteer(body, true), null);
+  return { manage: slot.manage, slot: { date: slot.date, name: slot.name, dish: slot.dish, note: slot.note, email: slot.email, phone: slot.phone },
+    details: volunteerDetails(t), train: publicTrainOut(t, await mtSlots(group.id, t.id), group.name) };
+});
+const manageOut = async (t, group, slot) => ({ token: t.token, slot: { date: slot.date, name: slot.name, dish: slot.dish, note: slot.note || '', email: slot.email, phone: slot.phone || '' },
+  details: volunteerDetails(t), train: publicTrainOut(t, await mtSlots(group.id, t.id), group.name) });
+route('GET', '/public/meal-signup/:token', async ({ params }) => {
+  const { t, group, slot } = await slotFromManage(params.token);
+  return manageOut(t, group, slot);
+});
+route('PUT', '/public/meal-signup/:token', async ({ body, params, ctx }) => {
+  rateLimit('mtm:' + ctx.ip, 30, 15 * 60e3);
+  const { t, group, slot } = await slotFromManage(params.token);
+  const v = readVolunteer({ ...slot, ...body }, true);
+  const next = await moveSlot(ctx, group, t, slot, { name: v.name, email: v.email, phone: v.phone, dish: v.dish, note: v.note, ...(body.date && body.date !== slot.date ? { date: str(body.date, 10) } : {}) });
+  return manageOut(t, group, next);
+});
+route('DELETE', '/public/meal-signup/:token', async ({ params, ctx }) => {
+  const { t, group, slot } = await slotFromManage(params.token);
+  await removeSlot(ctx, group, t, slot, 'self');
+  return { ok: true, token: t.token };
+});
+
+// ---- Day-before reminders (run hourly by the meal-reminders scheduled function) ----
+export async function runMealReminders() {
+  _store = null;
+  const pending = [], ctx = { background: (p) => pending.push(p) };
+  let sent = 0;
+  for (const key of await keys('mtactive/')) {
+    const ref = await get(key);
+    const t = ref && await get(`g/${ref.gid}/meals/${ref.mtid}`);
+    const group = t && await get(`groups/${ref.gid}`);
+    if (!t || !group) { await del(key); continue; }
+    const today = todayIn(t.tz);
+    if (t.end < addDays(today, -1)) { await del(key); continue; } // finished
+    if (!featuresOf(group).meals) continue;
+    let hour = 12;
+    try { hour = Number(new Intl.DateTimeFormat('en-US', { timeZone: t.tz, hour: 'numeric', hourCycle: 'h23' }).format(new Date())); } catch {}
+    if (hour < 9) continue; // send the day before, from 9 AM local
+    const tomorrow = addDays(today, 1);
+    const slot = await get(mtSlotKey(group.id, t.id, tomorrow));
+    if (!slot || slot.remindedAt) continue;
+    if (Date.now() - Date.parse(slot.updatedAt || slot.at) < 6 * 3600e3) { await put(mtSlotKey(group.id, t.id, tomorrow), { ...slot, remindedAt: now() }); continue; } // just signed up — confirmation covers it
+    volunteerEmail(ctx, group, t, slot, 'remind');
+    await put(mtSlotKey(group.id, t.id, tomorrow), { ...slot, remindedAt: now() });
+    sent++;
+  }
+  await Promise.allSettled(pending);
+  return sent;
+}
 
 // --- Events ---
 route('GET', '/groups/:gid/events', async ({ req, params }) => {

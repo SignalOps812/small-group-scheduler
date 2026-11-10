@@ -673,3 +673,58 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 @keyframes tour-fade { from { opacity: 0; } }
 @keyframes tour-pop { from { opacity: 0; scale: .96; } }
 @media (prefers-reduced-motion: reduce) { .tour-spot, .tour-card { transition: none; animation: none; } }
+
+/* ---------- Meal trains (public page + in-app) ---------- */
+.mt-top { position: sticky; top: 0; z-index: 20; height: 52px; display: flex; align-items: center; padding: 0 max(16px, env(safe-area-inset-left));
+  background: var(--bar); backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px); border-bottom: .5px solid var(--sep); }
+.mt-page { max-width: 640px; padding-bottom: calc(40px + env(safe-area-inset-bottom)); }
+.mt-hero { text-align: center; padding: 18px 8px 20px; }
+.mt-hero h1 { font-size: 28px; font-weight: 700; letter-spacing: -.02em; margin: 10px 0 4px; line-height: 1.15; }
+.mt-hero .sub { color: var(--label-2); font-size: 15px; }
+.mt-icon { width: 60px; height: 60px; margin: 0 auto; border-radius: 16px; display: grid; place-items: center; color: #fff;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--orange) 80%, #fff), var(--orange)); }
+.mt-icon svg { width: 34px; height: 34px; }
+.mt-icon.done { background: linear-gradient(180deg, color-mix(in srgb, var(--green) 80%, #fff), var(--green)); border-radius: 50%; }
+.mt-progress { max-width: 260px; margin: 14px auto 0; }
+.mt-kv { margin-top: 18px; }
+.mt-kv .row .v { text-align: right; white-space: pre-line; overflow-wrap: anywhere; }
+.mt-lock { display: flex; gap: 6px; align-items: center; }
+.mt-lock svg { width: 14px; height: 14px; flex: none; }
+.mt-dates .row { min-height: 64px; }
+.mt-date { gap: 12px; }
+.mt-date .date-tile { width: 44px; flex: none; }
+.mt-date-text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.mt-date-text b { font-weight: 600; }
+.mt-date-text small { color: var(--label-2); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mt-date.mine { background: color-mix(in srgb, var(--blue) 6%, transparent); }
+.mt-date .btn.sm { flex: none; }
+.mt-mine { display: flex; align-items: center; gap: 12px; padding: 14px 16px; margin-bottom: 16px; }
+.mt-mine > div:first-child { width: 30px; height: 30px; border-radius: 50%; background: var(--green); color: #fff; display: grid; place-items: center; flex: none; }
+.mt-mine > div:first-child svg { width: 18px; height: 18px; }
+.mt-mine > div:nth-child(2) { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.mt-mine small { color: var(--label-2); }
+.notice-card { padding: 14px 16px; margin-bottom: 16px; color: var(--label-2); font-size: 15px; }
+.mt-foot { text-align: center; color: var(--label-3); font-size: 13px; margin-top: 28px; }
+.mt-foot a { color: var(--blue); text-decoration: none; }
+.hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+.share-box { display: flex; gap: 8px; align-items: center; padding: 10px 12px; }
+.share-box code { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--label-2); }
+.weekday-chips { display: flex; gap: 6px; flex-wrap: wrap; padding: 10px 0; }
+.weekday-chips label { position: relative; }
+.weekday-chips input { position: absolute; opacity: 0; inset: 0; margin: 0; cursor: pointer; }
+.weekday-chips span { display: inline-grid; place-items: center; min-width: 40px; height: 34px; padding: 0 8px; border-radius: 999px; background: var(--fill-2); color: var(--label-2); font-size: 14px; font-weight: 600; }
+.weekday-chips input:checked + span { background: var(--blue); color: #fff; }
+.weekday-chips input:focus-visible + span { box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 40%, transparent); }
+.coord-list .row { cursor: pointer; }
+.coord-list input[type=checkbox] { width: 20px; height: 20px; flex: none; accent-color: var(--blue); }
+.train-card { display: block; width: 100%; text-align: left; border: 0; font: inherit; color: inherit; cursor: pointer; padding: 16px 18px; }
+.train-card h3 { margin: 0 0 2px; font-size: 17px; font-weight: 600; }
+.train-card .sub { color: var(--label-2); font-size: 14px; }
+.train-card .progress { margin: 12px 0 6px; }
+.train-card .foot { display: flex; justify-content: space-between; color: var(--label-2); font-size: 13px; }
+.train-list { display: grid; gap: 12px; }
+.mt-contact { display: block; font-size: 13px; color: var(--label-2); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mt-date.past { opacity: .55; }
+.detail-hero .mt-icon { width: 56px; height: 56px; }
+.coord-list .row { gap: 12px; }
+.mt-top .brand span { display: inline !important; }
