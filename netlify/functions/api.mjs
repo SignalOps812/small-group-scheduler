@@ -12,6 +12,8 @@
 //   g/<gid>/events/<id>, g/<gid>/polls/<id>, g/<gid>/votes/<pollId>/<uid>, g/<gid>/emaillog/<ts>
 //   g/<gid>/prayer/<id>             { id, title, description, createdBy, createdAt, updatedAt, lastActivity }
 //   g/<gid>/prayerc/<prayerId>/<cid> { id, userId, text, at, editedAt }
+//   g/<gid>/topics/<id>             discussion { id, title, body, createdBy, createdAt, lastActivity, lastBy, commentCount, lastComment }
+//   g/<gid>/topicc/<topicId>/<cid>  { id, userId, text, at, editedAt } · g/<gid>/topicread/<uid> { topicId: lastReadAt }
 //   g/<gid>/meals/<id>              meal train { id, recipient, start, end, days, dropStart/End, tz, address, coordinators, token, status, … }
 //   g/<gid>/mealslots/<id>/<date>   { date, name, email, phone, dish, note, userId|null, manage, at, remindedAt }
 //   mtpub/<token> → { gid, mtid }   public sign-up link · mtmanage/<token> → { gid, mtid, date } volunteer's change/cancel link
@@ -88,7 +90,7 @@ function parsePhone(v) {
   return e164;
 }
 // Each person's own email choices (all on by default); the group's settings still apply on top
-const USER_NOTIFY_KEYS = ['event', 'scheduled', 'poll', 'prayer', 'prayerComment', 'meal'];
+const USER_NOTIFY_KEYS = ['event', 'scheduled', 'poll', 'prayer', 'prayerComment', 'meal', 'topic', 'topicComment'];
 const userPrefs = (u) => Object.fromEntries(USER_NOTIFY_KEYS.map((k) => [k, (u.notifyPrefs || {})[k] !== false]));
 const userOut = (u) => ({ id: u.id, name: u.name, email: u.email, phone: u.phone || '', notify: u.notify !== false, notifyPrefs: userPrefs(u), tourDone: !!u.tourDone });
 const normCode = (c) => str(c, 60).toLowerCase().replace(/\s+/g, '-');
@@ -155,13 +157,13 @@ async function requireMember(req, gid) {
 const canModify = (m, ownerId) => m.organizer || m.user.id === ownerId;
 
 // Optional features organizers can switch on/off per group
-const FEATURE_DEFAULTS = { members: true, prayer: false, meals: false };
+const FEATURE_DEFAULTS = { members: true, prayer: false, meals: false, topics: true };
 const featuresOf = (g) => ({ ...FEATURE_DEFAULTS, ...(g.features || {}) });
 function requireFeature(m, f) {
   if (!featuresOf(m.group)[f]) throw new HttpError(403, 'That feature is turned off for this group.');
 }
 // Which group emails go out; organizers control each type
-const NOTIFY_DEFAULTS = { event: true, scheduled: true, poll: true, prayer: true, prayerComment: false, meal: true };
+const NOTIFY_DEFAULTS = { event: true, scheduled: true, poll: true, prayer: true, prayerComment: false, meal: true, topic: true, topicComment: false };
 const notifyOf = (g) => ({ ...NOTIFY_DEFAULTS, ...(g.notifications || {}) });
 async function groupSummary(gid, uid) {
   const [g, m, memberKeys] = await Promise.all([get(`groups/${gid}`), get(`g/${gid}/members/${uid}`), keys(`g/${gid}/members/`)]);
@@ -329,13 +331,26 @@ function notifyNewEvent(ctx, group, ev, byName, viaPoll) {
 function notifyNewPoll(ctx, group, poll, byName) {
   if (!notifyOf(group).poll) return;
   const link = deepLink(group.id, `polls/${poll.id}`);
+  const type = pollType(poll);
+  const anonNote = poll.anonymous ? `<p style="margin:10px 0 0;color:#8e8e93;font-size:14px">Responses are anonymous.</p>` : '';
+  if (type === 'choice') {
+    const list = poll.options.map((o) => `<li style="margin:2px 0">${esc(o.text)}</li>`).join('');
+    return notifyGroup('poll', ctx, group, `New poll: ${poll.title}`, esc(poll.title),
+      `<p style="margin:0 0 8px">${esc(byName)} asked the group${poll.multi ? ' (pick as many as you like)' : ''}:</p>${poll.description ? `<p style="margin:0 0 8px;white-space:pre-line">${esc(poll.description)}</p>` : ''}<ul style="margin:0;padding-left:20px">${list}</ul>${anonNote}`,
+      'Answer now', link, `${byName} asked: "${poll.title}". Answer here: ${link}`);
+  }
+  if (type === 'pitchin') {
+    return notifyGroup('poll', ctx, group, `Pitch-in sign-up: ${poll.title}`, `What will you bring? ${esc(poll.title)}`,
+      `<p style="margin:0 0 8px">${esc(byName)} started a pitch-in sign-up. Add what you’re bringing so we don’t end up with five desserts.</p>${detailRows([['Where', poll.location], ['Details', poll.description]])}${anonNote}`,
+      'Sign up', link, `${byName} started a pitch-in sign-up: "${poll.title}". Sign up here: ${link}`);
+  }
   const list = poll.options.map((o) => `<li style="margin:2px 0">${esc(fmtDate(o.date))}${o.time ? ' · ' + esc(fmtTimeTz(o.date, o.time, o.tz)) : ''}</li>`).join('');
   return notifyGroup('poll', ctx, group,
     `New poll: ${poll.title} — please vote`,
     `Help pick a date: ${esc(poll.title)}`,
     `<p style="margin:0 0 8px">${esc(byName)} wants to find a time that works for everyone. Mark the dates you can make${poll.pitchIn ? ', and say what you\u2019ll bring to the pitch-in' : ''}.</p>` +
       detailRows([['Where', poll.location], ['Cost', fmtCost(poll.cost)], ['Details', poll.description]]) +
-      `<p style="margin:10px 0 4px;color:#8e8e93;font-size:14px">Proposed times</p><ul style="margin:0;padding-left:20px">${list}</ul>`,
+      `<p style="margin:10px 0 4px;color:#8e8e93;font-size:14px">Proposed times</p><ul style="margin:0;padding-left:20px">${list}</ul>${anonNote}`,
     'Vote now', link,
     `${byName} created a poll: "${poll.title}". Vote here: ${link}`);
 }
@@ -376,9 +391,12 @@ async function nameMap(gid) {
 const BRING_CATS = ['Main dish', 'Side dish', 'Salad', 'Bread', 'Dessert', 'Drinks', 'Supplies', 'Other'];
 const bringPrefix = (gid, target) => `g/${gid}/bring/${target}/`;
 const contribItems = (c) => (Array.isArray(c.items) ? c.items : c.item ? [{ item: c.item, category: c.category }] : []);
-const contribOut = (c, names) => ({ userId: c.userId, name: names[c.userId] || 'Former member', items: contribItems(c), at: c.at });
-async function contributions(gid, target, names) {
-  return (await listAll(bringPrefix(gid, target))).sort((a, b) => a.at.localeCompare(b.at)).map((c) => contribOut(c, names));
+// Viewer-aware: anonymous sign-ups never carry who they're from, except a "mine" flag for the viewer
+const contribOut = (c, names, viewer, anon) => anon
+  ? { items: contribItems(c), at: c.at, mine: c.userId === viewer }
+  : { userId: c.userId, name: names[c.userId] || 'Former member', items: contribItems(c), at: c.at, mine: c.userId === viewer };
+async function contributions(gid, target, names, viewer, anon) {
+  return (await listAll(bringPrefix(gid, target))).sort((a, b) => a.at.localeCompare(b.at)).map((c) => contribOut(c, names, viewer, anon));
 }
 async function saveContribution(gid, target, uid, body) {
   const key = bringPrefix(gid, target) + uid;
@@ -393,22 +411,38 @@ async function clearContributions(gid, target) {
   await Promise.all((await keys(bringPrefix(gid, target))).map((k) => del(k)));
 }
 
-const eventOut = (e, names, contribs) => ({ ...e, pitchIn: !!e.pitchIn, createdByName: names[e.createdBy] || 'Former member',
-  ...(e.pitchIn ? { contributions: (contribs || []).map((c) => contribOut(c, names)).sort((a, b) => a.at.localeCompare(b.at)) } : {}) });
-async function eventOutOne(gid, e, names) {
-  return eventOut(e, names, e.pitchIn ? await listAll(bringPrefix(gid, `e-${e.id}`)) : []);
+const eventOut = (e, names, contribs, viewer) => ({ ...e, pitchIn: !!e.pitchIn, bringAnon: !!e.bringAnon, createdByName: names[e.createdBy] || 'Former member',
+  ...(e.pitchIn ? { contributions: (contribs || []).map((c) => contribOut(c, names, viewer, !!e.bringAnon)).sort((a, b) => a.at.localeCompare(b.at)) } : {}) });
+async function eventOutOne(gid, e, names, viewer) {
+  return eventOut(e, names, e.pitchIn ? await listAll(bringPrefix(gid, `e-${e.id}`)) : [], viewer);
 }
-async function pollOut(gid, p, names) {
-  const votes = await listAll(`g/${gid}/votes/${p.id}/`);
-  const options = p.options.map((o) => ({
-    ...o,
-    votes: votes.filter((v) => v.answers[o.id]).map((v) => ({ userId: v.userId, name: names[v.userId] || 'Former member', answer: v.answers[o.id], at: v.at })),
-  }));
-  const responders = votes.filter((v) => Object.keys(v.answers).length)
-    .sort((a, b) => a.at.localeCompare(b.at))
-    .map((v) => ({ userId: v.userId, name: names[v.userId] || 'Former member', at: v.at }));
-  return { ...p, pitchIn: !!p.pitchIn, options, responders, createdByName: names[p.createdBy] || 'Former member',
-    ...(p.pitchIn ? { contributions: await contributions(gid, `p-${p.id}`, names) } : {}) };
+const POLL_TYPES = ['dates', 'pitchin', 'choice'];
+const pollType = (p) => (POLL_TYPES.includes(p.type) ? p.type : 'dates');
+// Shapes a poll for one viewer. Anonymous polls report totals and the viewer's own answers — never who chose what.
+async function pollOut(gid, p, names, viewer) {
+  const type = pollType(p), anon = !!p.anonymous;
+  const votes = type === 'pitchin' ? [] : await listAll(`g/${gid}/votes/${p.id}/`);
+  const mineV = votes.find((v) => v.userId === viewer);
+  const options = (p.options || []).map((o) => {
+    const vs = votes.filter((v) => v.answers[o.id]);
+    return {
+      ...o,
+      mine: mineV?.answers[o.id] || null,
+      votes: anon ? vs.map((v) => ({ answer: v.answers[o.id] })) : vs.map((v) => ({ userId: v.userId, name: names[v.userId] || 'Former member', answer: v.answers[o.id], at: v.at })),
+    };
+  });
+  let responders = [], responderCount = 0, responded = false, contribs;
+  if (type === 'pitchin' || p.pitchIn) contribs = await contributions(gid, `p-${p.id}`, names, viewer, anon);
+  if (type === 'pitchin') {
+    responderCount = contribs.length; responded = contribs.some((c) => c.mine);
+    if (!anon) responders = contribs.map((c) => ({ userId: c.userId, name: c.name, at: c.at }));
+  } else {
+    const r = votes.filter((v) => Object.keys(v.answers).length).sort((a, b) => a.at.localeCompare(b.at));
+    responderCount = r.length; responded = r.some((v) => v.userId === viewer);
+    if (!anon) responders = r.map((v) => ({ userId: v.userId, name: names[v.userId] || 'Former member', at: v.at }));
+  }
+  return { ...p, type, anonymous: anon, multi: !!p.multi, pitchIn: type === 'pitchin' || !!p.pitchIn, options, responders, responderCount, responded,
+    createdByName: names[p.createdBy] || 'Former member', ...(contribs ? { contributions: contribs } : {}) };
 }
 function readEventBody(body) {
   const title = str(body.title, 120), description = str(body.description, 4000), location = str(body.location, 200);
@@ -730,6 +764,126 @@ route('DELETE', '/groups/:gid/prayers/:id/comments/:cid', async ({ req, params }
   if (!canModify(m, c.userId)) throw new HttpError(403, 'You can only remove your own comments.');
   await del(key);
   return { prayer: await prayerOut(m.group.id, p, await nameMap(m.group.id)) };
+});
+
+// --- Discussion topics ---
+// Unread = something new since you last opened the topic, posted by someone other than you.
+const topicReadKey = (gid, uid) => `g/${gid}/topicread/${uid}`;
+const isUnread = (t, reads, uid) => t.lastBy !== uid && (!reads[t.id] || reads[t.id] < t.lastActivity);
+async function getTopic(m, id) {
+  const t = await get(`g/${m.group.id}/topics/${validId(id)}`);
+  if (!t) throw new HttpError(404, 'Topic not found.');
+  return t;
+}
+function readTopicBody(body) {
+  const title = str(body.title, 160), text = str(body.body, 6000);
+  if (!title) throw new HttpError(400, 'Please give the topic a title.');
+  return { title, body: text };
+}
+async function topicFull(m, t, names) {
+  const comments = (await listAll(`g/${m.group.id}/topicc/${t.id}/`)).sort((a, b) => a.at.localeCompare(b.at))
+    .map((c) => ({ ...c, name: names[c.userId] || 'Former member' }));
+  return { ...t, createdByName: names[t.createdBy] || 'Former member', comments, unread: false };
+}
+async function markTopicRead(m, t) {
+  const key = topicReadKey(m.group.id, m.user.id);
+  const reads = (await get(key)) || {};
+  reads[t.id] = now();
+  await put(key, reads);
+}
+function notifyTopic(ctx, group, t, byName, byId, comment) {
+  const type = comment ? 'topicComment' : 'topic';
+  if (!notifyOf(group)[type]) return;
+  const link = deepLink(group.id, `topics/${t.id}`);
+  return notifyGroup(type, ctx, group,
+    comment ? `Re: ${t.title}` : `New topic: ${t.title}`,
+    comment ? `${esc(byName)} replied in “${esc(t.title)}”` : esc(t.title),
+    comment ? `<p style="margin:0;white-space:pre-line">${esc(comment.text)}</p>`
+      : `<p style="margin:0 0 8px">${esc(byName)} started a discussion.</p>${t.body ? `<p style="margin:0;white-space:pre-line">${esc(t.body)}</p>` : ''}`,
+    comment ? 'Reply' : 'Join the discussion', link,
+    `${comment ? `${byName} replied in "${t.title}":\n\n${comment.text}` : `${byName} started a discussion: "${t.title}"${t.body ? '\n\n' + t.body : ''}`}\n\n${link}`, byId);
+}
+
+route('GET', '/groups/:gid/topics', async ({ req, params }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'topics');
+  const [list, names, reads] = await Promise.all([listAll(`g/${m.group.id}/topics/`), nameMap(m.group.id), get(topicReadKey(m.group.id, m.user.id))]);
+  list.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  return { topics: list.map((t) => ({ ...t, createdByName: names[t.createdBy] || 'Former member', lastByName: t.lastBy ? names[t.lastBy] || 'Former member' : '',
+    unread: isUnread(t, reads || {}, m.user.id) })) };
+});
+route('GET', '/groups/:gid/topics/:id', async ({ req, params }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'topics');
+  const t = await getTopic(m, params.id);
+  await markTopicRead(m, t);
+  return { topic: await topicFull(m, t, await nameMap(m.group.id)) };
+});
+route('POST', '/groups/:gid/topics', async ({ req, body, params, ctx }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'topics');
+  const at = now();
+  const t = { id: newId(), ...readTopicBody(body), createdBy: m.user.id, createdAt: at, lastActivity: at, lastBy: m.user.id, commentCount: 0, lastComment: '' };
+  await put(`g/${m.group.id}/topics/${t.id}`, t);
+  await markTopicRead(m, t);
+  await notifyTopic(ctx, m.group, t, m.user.name, m.user.id);
+  return { topic: await topicFull(m, t, { [m.user.id]: m.user.name }) };
+});
+route('PUT', '/groups/:gid/topics/:id', async ({ req, body, params }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'topics');
+  const t = await getTopic(m, params.id);
+  if (!canModify(m, t.createdBy)) throw new HttpError(403, 'Only the person who started this topic or an organizer can edit it.');
+  const next = { ...t, ...readTopicBody(body), updatedAt: now() };
+  await put(`g/${m.group.id}/topics/${t.id}`, next);
+  return { topic: await topicFull(m, next, await nameMap(m.group.id)) };
+});
+route('DELETE', '/groups/:gid/topics/:id', async ({ req, params }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'topics');
+  const t = await getTopic(m, params.id);
+  if (!canModify(m, t.createdBy)) throw new HttpError(403, 'Only the person who started this topic or an organizer can delete it.');
+  await Promise.all((await keys(`g/${m.group.id}/topicc/${t.id}/`)).map((k) => del(k)));
+  await del(`g/${m.group.id}/topics/${t.id}`);
+  return { ok: true };
+});
+async function refreshTopicSummary(m, t) { // keep the list view's counts and preview in step with the comments
+  const comments = (await listAll(`g/${m.group.id}/topicc/${t.id}/`)).sort((a, b) => a.at.localeCompare(b.at));
+  const last = comments[comments.length - 1];
+  const next = { ...t, commentCount: comments.length, lastComment: last ? last.text.slice(0, 160) : '', lastCommentBy: last ? last.userId : null };
+  await put(`g/${m.group.id}/topics/${t.id}`, next);
+  return next;
+}
+route('POST', '/groups/:gid/topics/:id/comments', async ({ req, body, params, ctx }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'topics');
+  const t = await getTopic(m, params.id);
+  const text = str(body.text, 4000);
+  if (!text) throw new HttpError(400, 'Write a comment first.');
+  const c = { id: newId(), userId: m.user.id, text, at: now() };
+  await put(`g/${m.group.id}/topicc/${t.id}/${c.id}`, c);
+  const next = await refreshTopicSummary(m, { ...t, lastActivity: c.at, lastBy: m.user.id });
+  await markTopicRead(m, next);
+  await notifyTopic(ctx, m.group, next, m.user.name, m.user.id, c);
+  return { topic: await topicFull(m, next, await nameMap(m.group.id)) };
+});
+route('PUT', '/groups/:gid/topics/:id/comments/:cid', async ({ req, body, params }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'topics');
+  const t = await getTopic(m, params.id);
+  const key = `g/${m.group.id}/topicc/${t.id}/${validId(params.cid)}`;
+  const c = await get(key);
+  if (!c) throw new HttpError(404, 'Comment not found.');
+  if (!canModify(m, c.userId)) throw new HttpError(403, 'You can only edit your own comments.');
+  const text = str(body.text, 4000);
+  if (!text) throw new HttpError(400, 'A comment can’t be empty.');
+  await put(key, { ...c, text, editedAt: now() });
+  const next = await refreshTopicSummary(m, t);
+  return { topic: await topicFull(m, next, await nameMap(m.group.id)) };
+});
+route('DELETE', '/groups/:gid/topics/:id/comments/:cid', async ({ req, params }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'topics');
+  const t = await getTopic(m, params.id);
+  const key = `g/${m.group.id}/topicc/${t.id}/${validId(params.cid)}`;
+  const c = await get(key);
+  if (!c) throw new HttpError(404, 'Comment not found.');
+  if (!canModify(m, c.userId)) throw new HttpError(403, 'You can only remove your own comments.');
+  await del(key);
+  const next = await refreshTopicSummary(m, t);
+  return { topic: await topicFull(m, next, await nameMap(m.group.id)) };
 });
 
 // --- Meal trains ---
@@ -1070,7 +1224,7 @@ route('GET', '/groups/:gid/events', async ({ req, params }) => {
   const [events, names, bring] = await Promise.all([listAll(`g/${m.group.id}/events/`), nameMap(m.group.id), listAll(`g/${m.group.id}/bring/`)]);
   const byTarget = {};
   for (const c of bring) (byTarget[c.target] ||= []).push(c);
-  return { events: events.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)).map((e) => eventOut(e, names, byTarget[`e-${e.id}`])) };
+  return { events: events.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time)).map((e) => eventOut(e, names, byTarget[`e-${e.id}`], m.user.id)) };
 });
 
 route('POST', '/groups/:gid/events', async ({ req, body, params, ctx }) => {
@@ -1078,7 +1232,7 @@ route('POST', '/groups/:gid/events', async ({ req, body, params, ctx }) => {
   const ev = { id: newId(), ...readEventBody(body), createdBy: m.user.id, pollId: null, createdAt: now() };
   await put(`g/${m.group.id}/events/${ev.id}`, ev);
   await notifyNewEvent(ctx, m.group, ev, m.user.name, false);
-  return { event: eventOut(ev, { [m.user.id]: m.user.name }, []) };
+  return { event: eventOut(ev, { [m.user.id]: m.user.name }, [], m.user.id) };
 });
 
 route('PUT', '/groups/:gid/events/:id', async ({ req, body, params }) => {
@@ -1089,7 +1243,7 @@ route('PUT', '/groups/:gid/events/:id', async ({ req, body, params }) => {
   if (!canModify(m, ev.createdBy)) throw new HttpError(403, 'Only the person who added this event can edit it.');
   const next = { ...ev, ...readEventBody(body), updatedAt: now() };
   await put(key, next);
-  return { event: await eventOutOne(m.group.id, next, await nameMap(m.group.id)) };
+  return { event: await eventOutOne(m.group.id, next, await nameMap(m.group.id), m.user.id) };
 });
 
 route('DELETE', '/groups/:gid/events/:id', async ({ req, params }) => {
@@ -1114,120 +1268,212 @@ route('PUT', '/groups/:gid/events/:id/bring', async ({ req, body, params }) => {
   if (!ev) throw new HttpError(404, 'Event not found.');
   if (!ev.pitchIn) throw new HttpError(400, 'This event isn\u2019t a pitch-in.');
   await saveContribution(m.group.id, `e-${ev.id}`, m.user.id, body);
-  return { event: await eventOutOne(m.group.id, ev, await nameMap(m.group.id)) };
+  return { event: await eventOutOne(m.group.id, ev, await nameMap(m.group.id), m.user.id) };
 });
 
 // --- Polls ---
-route('GET', '/groups/:gid/polls', async ({ req, params }) => {
-  const m = await requireMember(req, params.gid);
-  const [polls, names] = await Promise.all([listAll(`g/${m.group.id}/polls/`), nameMap(m.group.id)]);
-  polls.sort((a, b) => (b.status === 'open') - (a.status === 'open') || b.createdAt.localeCompare(a.createdAt));
-  return { polls: await Promise.all(polls.map((p) => pollOut(m.group.id, p, names))) };
-});
-
-route('POST', '/groups/:gid/polls', async ({ req, body, params, ctx }) => {
-  const m = await requireMember(req, params.gid);
-  const title = str(body.title, 120);
-  if (!title) throw new HttpError(400, 'Please add a title.');
-  const seen = new Set(), options = [];
-  for (const o of (Array.isArray(body.options) ? body.options : []).slice(0, 30)) {
-    const date = str(o?.date, 10), time = str(o?.time, 5), tz = time ? validTz(o?.tz) : '';
-    if (!isDate(date) || !isTime(time) || seen.has(date + time + tz)) continue;
-    seen.add(date + time + tz);
-    options.push({ id: newId(), date, time, tz });
-  }
-  if (options.length < 2) throw new HttpError(400, 'Add at least two date options for people to vote on.');
-  options.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
-  const poll = { id: newId(), title, description: str(body.description, 4000), location: str(body.location, 200), cost: parseCost(body.cost),
-    options, pitchIn: !!body.pitchIn, status: 'open', eventId: null, scheduledOptionId: null, createdBy: m.user.id, createdAt: now() };
-  await put(`g/${m.group.id}/polls/${poll.id}`, poll);
-  await notifyNewPoll(ctx, m.group, poll, m.user.name);
-  return { poll: await pollOut(m.group.id, poll, { [m.user.id]: m.user.name }) };
-});
-
-route('PUT', '/groups/:gid/polls/:id', async ({ req, body, params }) => {
-  const m = await requireMember(req, params.gid);
-  const pk = `g/${m.group.id}/polls/${validId(params.id)}`;
-  const poll = await get(pk);
-  if (!poll) throw new HttpError(404, 'Poll not found.');
-  if (!canModify(m, poll.createdBy)) throw new HttpError(403, 'Only the person who created this poll or a group organizer can edit it.');
-  if (poll.status !== 'open') throw new HttpError(400, 'A date has already been picked for this poll. Edit the calendar event instead.');
-  const title = str(body.title, 120);
-  if (!title) throw new HttpError(400, 'Please add a title.');
-  const existing = new Map(poll.options.map((o) => [o.id, o]));
+// Three kinds: 'dates' (vote Yes/Maybe/No on dates, then schedule one), 'pitchin' (food sign-up),
+// 'choice' (general multiple choice). Any kind can collect anonymous responses.
+function readDateOptions(body, existing) {
   const seen = new Set(), options = [], cleared = new Set();
   for (const o of (Array.isArray(body.options) ? body.options : []).slice(0, 30)) {
     const date = str(o?.date, 10), time = str(o?.time, 5), tz = time ? validTz(o?.tz) : '';
     if (!isDate(date) || !isTime(time) || seen.has(date + time + tz)) continue;
     seen.add(date + time + tz);
-    const prev = typeof o.id === 'string' ? existing.get(o.id) : null;
+    const prev = existing && typeof o.id === 'string' ? existing.get(o.id) : null;
     if (prev) {
       // answered for a different time (a zone added to an older option doesn't count as a change)
       if (prev.date !== date || prev.time !== time || (prev.tz && prev.tz !== tz)) cleared.add(prev.id);
       options.push({ id: prev.id, date, time, tz });
-    } else {
-      options.push({ id: newId(), date, time, tz });
-    }
+    } else options.push({ id: newId(), date, time, tz });
   }
   if (options.length < 2) throw new HttpError(400, 'Add at least two date options for people to vote on.');
   options.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
-  const keep = new Set(options.map((o) => o.id));
-  // Drop answers only for removed options and options whose date/time changed
-  for (const k of await keys(`g/${m.group.id}/votes/${poll.id}/`)) {
-    const v = await get(k);
-    if (!v) continue;
-    let changed = false;
-    for (const optId of Object.keys(v.answers)) {
-      if (!keep.has(optId) || cleared.has(optId)) { delete v.answers[optId]; changed = true; }
-    }
-    if (!changed) continue;
-    if (Object.keys(v.answers).length) await put(k, v); else await del(k);
+  return { options, cleared };
+}
+function readChoiceOptions(body, existing) {
+  const seen = new Set(), options = [], cleared = new Set();
+  for (const o of (Array.isArray(body.options) ? body.options : []).slice(0, 20)) {
+    const text = str(o?.text, 200), k = text.toLowerCase();
+    if (!text || seen.has(k)) continue;
+    seen.add(k);
+    const prev = existing && typeof o.id === 'string' ? existing.get(o.id) : null;
+    if (prev) {
+      if (prev.text.toLowerCase() !== k) cleared.add(prev.id); // reworded into a different answer
+      options.push({ id: prev.id, text });
+    } else options.push({ id: newId(), text });
   }
-  const next = { ...poll, title, description: str(body.description, 4000), location: str(body.location, 200),
-    cost: parseCost(body.cost), options, pitchIn: !!body.pitchIn, updatedAt: now() };
+  if (options.length < 2) throw new HttpError(400, 'Add at least two answers for people to choose from.');
+  return { options, cleared };
+}
+async function getPoll(m, id) {
+  const pk = `g/${m.group.id}/polls/${validId(id)}`;
+  const poll = await get(pk);
+  if (!poll) throw new HttpError(404, 'Poll not found.');
+  return { pk, poll };
+}
+// Move a pitch-in poll's sign-ups onto a calendar event (merging with anything already there), then retire the poll
+async function linkPitchinToEvent(m, poll, eventId) {
+  const ek = `g/${m.group.id}/events/${validId(eventId)}`;
+  const ev = await get(ek);
+  if (!ev) throw new HttpError(404, 'That event no longer exists.');
+  for (const c of await listAll(bringPrefix(m.group.id, `p-${poll.id}`))) {
+    const key = bringPrefix(m.group.id, `e-${ev.id}`) + c.userId;
+    const prev = await get(key);
+    const items = [...(prev ? contribItems(prev) : []), ...contribItems(c)].slice(0, 15);
+    await put(key, { target: `e-${ev.id}`, userId: c.userId, items, at: prev?.at || c.at });
+  }
+  const next = { ...ev, pitchIn: true, bringAnon: !!ev.bringAnon || !!poll.anonymous, description: ev.description || poll.description || '', updatedAt: now() };
+  await put(ek, next);
+  await clearContributions(m.group.id, `p-${poll.id}`);
+  await del(`g/${m.group.id}/polls/${poll.id}`);
+  return next;
+}
+
+route('GET', '/groups/:gid/polls', async ({ req, params }) => {
+  const m = await requireMember(req, params.gid);
+  const [polls, names] = await Promise.all([listAll(`g/${m.group.id}/polls/`), nameMap(m.group.id)]);
+  polls.sort((a, b) => (b.status === 'open') - (a.status === 'open') || b.createdAt.localeCompare(a.createdAt));
+  return { polls: await Promise.all(polls.map((p) => pollOut(m.group.id, p, names, m.user.id))) };
+});
+
+route('POST', '/groups/:gid/polls', async ({ req, body, params, ctx }) => {
+  const m = await requireMember(req, params.gid);
+  const type = POLL_TYPES.includes(body.type) ? body.type : 'dates';
+  const title = str(body.title, 160);
+  if (!title) throw new HttpError(400, type === 'choice' ? 'Please add a question.' : 'Please add a title.');
+  const base = { id: newId(), type, title, description: str(body.description, 4000), anonymous: !!body.anonymous, status: 'open',
+    createdBy: m.user.id, createdAt: now() };
+  let poll;
+  if (type === 'dates') {
+    poll = { ...base, location: str(body.location, 200), cost: parseCost(body.cost), options: readDateOptions(body).options,
+      pitchIn: !!body.pitchIn, eventId: null, scheduledOptionId: null };
+  } else if (type === 'choice') {
+    poll = { ...base, options: readChoiceOptions(body).options, multi: !!body.multi };
+  } else {
+    // Pitch-in: if they picked an event, the sign-up lives on that event instead of a separate poll
+    if (body.eventId) {
+      const ek = `g/${m.group.id}/events/${validId(str(body.eventId, 40))}`;
+      const ev = await get(ek);
+      if (!ev) throw new HttpError(404, 'That event no longer exists.');
+      const next = { ...ev, pitchIn: true, bringAnon: !!ev.bringAnon || !!body.anonymous, description: ev.description || base.description, updatedAt: now() };
+      await put(ek, next);
+      return { event: await eventOutOne(m.group.id, next, await nameMap(m.group.id), m.user.id), linked: true };
+    }
+    poll = { ...base, location: str(body.location, 200), options: [], pitchIn: true, eventId: null };
+  }
+  await put(`g/${m.group.id}/polls/${poll.id}`, poll);
+  await notifyNewPoll(ctx, m.group, poll, m.user.name);
+  return { poll: await pollOut(m.group.id, poll, { [m.user.id]: m.user.name }, m.user.id) };
+});
+
+route('PUT', '/groups/:gid/polls/:id', async ({ req, body, params }) => {
+  const m = await requireMember(req, params.gid);
+  const { pk, poll } = await getPoll(m, params.id);
+  if (!canModify(m, poll.createdBy)) throw new HttpError(403, 'Only the person who created this poll or a group organizer can edit it.');
+  if (poll.status === 'scheduled') throw new HttpError(400, 'A date has already been picked for this poll. Edit the calendar event instead.');
+  const type = pollType(poll);
+  const title = str(body.title, 160);
+  if (!title) throw new HttpError(400, 'Please add a title.');
+  // Responses collected anonymously stay anonymous; a named poll can be made anonymous
+  const anonymous = !!poll.anonymous || !!body.anonymous;
+  let next = { ...poll, type, title, description: str(body.description, 4000), anonymous, updatedAt: now() };
+  let keep = null, cleared = new Set();
+  if (type === 'dates') {
+    const r = readDateOptions(body, new Map((poll.options || []).map((o) => [o.id, o])));
+    next = { ...next, location: str(body.location, 200), cost: parseCost(body.cost), options: r.options, pitchIn: !!body.pitchIn };
+    keep = new Set(r.options.map((o) => o.id)); cleared = r.cleared;
+  } else if (type === 'choice') {
+    const r = readChoiceOptions(body, new Map((poll.options || []).map((o) => [o.id, o])));
+    next = { ...next, options: r.options, multi: !!body.multi };
+    keep = new Set(r.options.map((o) => o.id)); cleared = r.cleared;
+  } else {
+    next = { ...next, location: str(body.location, 200) };
+  }
+  if (keep) { // drop answers only for removed options and options that changed meaning
+    for (const k of await keys(`g/${m.group.id}/votes/${poll.id}/`)) {
+      const v = await get(k);
+      if (!v) continue;
+      let changed = false;
+      for (const optId of Object.keys(v.answers)) if (!keep.has(optId) || cleared.has(optId)) { delete v.answers[optId]; changed = true; }
+      if (type === 'choice' && !next.multi && Object.keys(v.answers).length > 1) { // switched to one answer: keep the most recent single pick
+        const firstKept = Object.keys(v.answers).find((id) => keep.has(id));
+        v.answers = firstKept ? { [firstKept]: v.answers[firstKept] } : {}; changed = true;
+      }
+      if (!changed) continue;
+      if (Object.keys(v.answers).length) await put(k, v); else await del(k);
+    }
+  }
   await put(pk, next);
-  return { poll: await pollOut(m.group.id, next, await nameMap(m.group.id)) };
+  return { poll: await pollOut(m.group.id, next, await nameMap(m.group.id), m.user.id) };
 });
 
 route('PUT', '/groups/:gid/polls/:id/bring', async ({ req, body, params }) => {
   const m = await requireMember(req, params.gid);
-  const poll = await get(`g/${m.group.id}/polls/${validId(params.id)}`);
-  if (!poll) throw new HttpError(404, 'Poll not found.');
-  if (!poll.pitchIn) throw new HttpError(400, 'This poll isn\u2019t collecting pitch-in items.');
-  if (poll.status !== 'open') throw new HttpError(400, 'A date has been picked — add what you\u2019re bringing on the calendar event instead.');
+  const { poll } = await getPoll(m, params.id);
+  if (!(pollType(poll) === 'pitchin' || poll.pitchIn)) throw new HttpError(400, 'This poll isn’t collecting pitch-in items.');
+  if (poll.status === 'scheduled') throw new HttpError(400, 'A date has been picked — add what you’re bringing on the calendar event instead.');
+  if (poll.status === 'closed') throw new HttpError(400, 'This sign-up is closed.');
   await saveContribution(m.group.id, `p-${poll.id}`, m.user.id, body);
-  return { poll: await pollOut(m.group.id, poll, await nameMap(m.group.id)) };
+  return { poll: await pollOut(m.group.id, poll, await nameMap(m.group.id), m.user.id) };
 });
 
 route('POST', '/groups/:gid/polls/:id/vote', async ({ req, body, params }) => {
   const m = await requireMember(req, params.gid);
-  const poll = await get(`g/${m.group.id}/polls/${validId(params.id)}`);
-  if (!poll) throw new HttpError(404, 'Poll not found.');
-  if (poll.status !== 'open') throw new HttpError(400, 'This poll is closed — a date has already been picked.');
+  const { poll } = await getPoll(m, params.id);
+  const type = pollType(poll);
+  if (type === 'pitchin') throw new HttpError(400, 'Sign up with what you’re bringing instead.');
+  if (poll.status !== 'open') throw new HttpError(400, type === 'dates' ? 'This poll is closed — a date has already been picked.' : 'This poll is closed.');
   const key = `g/${m.group.id}/votes/${poll.id}/${m.user.id}`;
   const mine = (await get(key)) || { userId: m.user.id, answers: {} };
   const ids = new Set(poll.options.map((o) => o.id));
-  for (const [optId, answer] of Object.entries(body?.votes || {})) {
-    if (!ids.has(optId)) continue;
-    if (answer === null || answer === '') delete mine.answers[optId];
-    else if (['yes', 'maybe', 'no'].includes(answer)) mine.answers[optId] = answer;
+  if (type === 'choice') {
+    const picks = [...new Set((Array.isArray(body?.choices) ? body.choices : []).filter((id) => ids.has(id)))];
+    if (!poll.multi && picks.length > 1) throw new HttpError(400, 'Pick just one answer.');
+    mine.answers = Object.fromEntries(picks.map((id) => [id, 'x']));
+  } else {
+    for (const [optId, answer] of Object.entries(body?.votes || {})) {
+      if (!ids.has(optId)) continue;
+      if (answer === null || answer === '') delete mine.answers[optId];
+      else if (['yes', 'maybe', 'no'].includes(answer)) mine.answers[optId] = answer;
+    }
   }
   mine.at = now();
   if (Object.keys(mine.answers).length) await put(key, mine); else await del(key);
-  return { poll: await pollOut(m.group.id, poll, await nameMap(m.group.id)) };
+  return { poll: await pollOut(m.group.id, poll, await nameMap(m.group.id), m.user.id) };
+});
+
+// Close or reopen a multiple-choice or pitch-in poll
+route('POST', '/groups/:gid/polls/:id/status', async ({ req, body, params }) => {
+  const m = await requireMember(req, params.gid);
+  const { pk, poll } = await getPoll(m, params.id);
+  if (!canModify(m, poll.createdBy)) throw new HttpError(403, 'Only the person who created this poll or a group organizer can close it.');
+  if (pollType(poll) === 'dates') throw new HttpError(400, 'Date polls close when you schedule a date.');
+  const next = { ...poll, status: body.status === 'closed' ? 'closed' : 'open', closedAt: body.status === 'closed' ? now() : null };
+  await put(pk, next);
+  return { poll: await pollOut(m.group.id, next, await nameMap(m.group.id), m.user.id) };
+});
+
+// Attach a pitch-in poll to a calendar event: sign-ups move to the event and the poll goes away
+route('POST', '/groups/:gid/polls/:id/link-event', async ({ req, body, params }) => {
+  const m = await requireMember(req, params.gid);
+  const { poll } = await getPoll(m, params.id);
+  if (pollType(poll) !== 'pitchin') throw new HttpError(400, 'Only pitch-in sign-ups can be linked to an event.');
+  if (!canModify(m, poll.createdBy)) throw new HttpError(403, 'Only the person who created this sign-up or a group organizer can link it.');
+  const ev = await linkPitchinToEvent(m, poll, str(body.eventId, 40));
+  return { event: await eventOutOne(m.group.id, ev, await nameMap(m.group.id), m.user.id) };
 });
 
 route('POST', '/groups/:gid/polls/:id/schedule', async ({ req, body, params, ctx }) => {
   const m = await requireMember(req, params.gid);
-  const pk = `g/${m.group.id}/polls/${validId(params.id)}`;
-  const poll = await get(pk);
-  if (!poll) throw new HttpError(404, 'Poll not found.');
+  const { pk, poll } = await getPoll(m, params.id);
+  if (pollType(poll) !== 'dates') throw new HttpError(400, 'Only date polls can be scheduled.');
   if (!canModify(m, poll.createdBy)) throw new HttpError(403, 'Only the person who created this poll can pick the final date.');
   if (poll.status !== 'open') throw new HttpError(400, 'A date has already been picked for this poll.');
   const opt = poll.options.find((o) => o.id === body.optionId);
   if (!opt) throw new HttpError(400, 'Please choose one of the poll’s dates.');
   const ev = { id: newId(), title: poll.title, description: poll.description, date: opt.date, time: opt.time, tz: opt.tz || '', cost: poll.cost,
-    location: poll.location, pitchIn: !!poll.pitchIn, createdBy: m.user.id, pollId: poll.id, createdAt: now() };
+    location: poll.location, pitchIn: !!poll.pitchIn, bringAnon: !!poll.anonymous, createdBy: m.user.id, pollId: poll.id, createdAt: now() };
   await put(`g/${m.group.id}/events/${ev.id}`, ev);
   if (poll.pitchIn) { // carry everyone's pitch-in items over to the calendar event
     for (const c of await listAll(bringPrefix(m.group.id, `p-${poll.id}`))) {
@@ -1238,14 +1484,12 @@ route('POST', '/groups/:gid/polls/:id/schedule', async ({ req, body, params, ctx
   await put(pk, next);
   await notifyNewEvent(ctx, m.group, ev, m.user.name, true);
   const names = await nameMap(m.group.id);
-  return { poll: await pollOut(m.group.id, next, names), event: await eventOutOne(m.group.id, ev, names) };
+  return { poll: await pollOut(m.group.id, next, names, m.user.id), event: await eventOutOne(m.group.id, ev, names, m.user.id) };
 });
 
 route('DELETE', '/groups/:gid/polls/:id', async ({ req, params }) => {
   const m = await requireMember(req, params.gid);
-  const pk = `g/${m.group.id}/polls/${validId(params.id)}`;
-  const poll = await get(pk);
-  if (!poll) throw new HttpError(404, 'Poll not found.');
+  const { pk, poll } = await getPoll(m, params.id);
   if (!canModify(m, poll.createdBy)) throw new HttpError(403, 'Only the person who created this poll can delete it.');
   await Promise.all((await keys(`g/${m.group.id}/votes/${poll.id}/`)).map((k) => del(k)));
   await clearContributions(m.group.id, `p-${poll.id}`);

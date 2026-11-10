@@ -95,8 +95,10 @@
   const canModify = (ownerId) => S.me && (isOrganizer() || S.me.id === ownerId);
   const feat = (f) => { const g = curGroup(); return !!(g && (g.features || { members: true, prayer: false })[f]); };
   // Members tab stays visible to organizers even when hidden from everyone else
-  const showTab = (k) => k === 'prayer' ? feat('prayer') : k === 'meals' ? feat('meals') : k === 'members' ? feat('members') || isOrganizer() : true;
-  const tabList = () => [['calendar', 'Calendar', I.cal], ['polls', 'Polls', I.poll], ['prayer', 'Prayer', I.pray], ['meals', 'Meals', I.meal], ['members', 'Members', I.people]].filter(([k]) => showTab(k));
+  const showTab = (k) => k === 'prayer' ? feat('prayer') : k === 'meals' ? feat('meals') : k === 'topics' ? feat('topics') : k === 'members' ? feat('members') || isOrganizer() : true;
+  const unreadTopics = () => (S.topics || []).filter((t) => t.unread).length;
+  const tabBadge = (k) => { const n = k === 'polls' ? pendingCount() : k === 'topics' ? unreadTopics() : 0; return n ? `<span class="badge">${n}</span>` : ''; };
+  const tabList = () => [['calendar', 'Calendar', I.cal], ['polls', 'Polls', I.poll], ['prayer', 'Prayer', I.pray], ['meals', 'Meals', I.meal], ['topics', 'Topics', I.chat], ['members', 'Members', I.people]].filter(([k]) => showTab(k));
   const gp = (path = '') => `/groups/${encodeURIComponent(S.gid)}${path}`;
   const store = {
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -120,6 +122,9 @@
     info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="7.8" r=".6" fill="currentColor"/></svg>',
     meal: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13h18a9 9 0 0 1-18 0z"/><path d="M8 9c0-1.5 1-2 1-3.5M12 9c0-1.5 1-2 1-3.5M16 9c0-1.5 1-2 1-3.5"/></svg>',
     share: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3M8 7l4-4 4 4"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></svg>',
+    list: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1.2"/><circle cx="4.5" cy="12" r="1.2"/><circle cx="4.5" cy="18" r="1.2"/></svg>',
+    eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 5.1A10.4 10.4 0 0 1 12 5c6 0 9.5 7 9.5 7a17 17 0 0 1-2.6 3.5M6.6 6.6C3.9 8.4 2.5 12 2.5 12s3.5 7 9.5 7a9.6 9.6 0 0 0 4.4-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>',
+    chat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h8A2.5 2.5 0 0 1 17 5.5v5a2.5 2.5 0 0 1-2.5 2.5H9l-4 3v-3.2A2.5 2.5 0 0 1 4 10.5z"/><path d="M20 9v6.5a2.5 2.5 0 0 1-1 2V21l-3.3-2.5H11"/></svg>',
     pray: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20.5s-7.5-4.4-7.5-10A4.3 4.3 0 0 1 12 7.6a4.3 4.3 0 0 1 7.5 2.9c0 5.6-7.5 10-7.5 10z"/></svg>',
     key: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3M14 9l2 2"/></svg>',
     minus: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10" fill="var(--red)"/><path d="M7.5 12h9" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></svg>',
@@ -167,24 +172,26 @@
   async function loadAll() {
     if (!S.gid) return;
     const gid = S.gid;
-    const [e, p, m, pr, mt] = await Promise.all([api('GET', gp('/events')), api('GET', gp('/polls')), api('GET', gp('/members')),
+    const [e, p, m, pr, mt, tp] = await Promise.all([api('GET', gp('/events')), api('GET', gp('/polls')), api('GET', gp('/members')),
       feat('prayer') ? api('GET', gp('/prayers')) : Promise.resolve({ prayers: [] }),
-      feat('meals') ? api('GET', gp('/meals')) : Promise.resolve({ trains: [] })]);
+      feat('meals') ? api('GET', gp('/meals')) : Promise.resolve({ trains: [] }),
+      feat('topics') ? api('GET', gp('/topics')) : Promise.resolve({ topics: [] })]);
     if (gid !== S.gid) return; // switched groups mid-load
-    S.events = e.events; S.polls = p.polls; S.members = m.members; S.prayers = pr.prayers; S.trains = mt.trains; S.loaded = true;
+    S.events = e.events; S.polls = p.polls; S.members = m.members; S.prayers = pr.prayers; S.trains = mt.trains; S.topics = tp.topics; S.loaded = true;
   }
   const eventsOn = (d) => S.events.filter((e) => e.date === d);
-  const pendingPolls = () => S.polls.filter((p) => p.status === 'open' && !p.responders.some((r) => r.userId === S.me.id));
+  const pendingPolls = () => S.polls.filter((p) => p.status === 'open' && !p.responded);
   // Calendar events with pitch-in (not created from a scheduling poll) also appear on the Polls tab as food-only sign-ups
   const foodPolls = () => S.events.filter((e) => e.pitchIn && !e.pollId && e.date >= todayStr());
-  const signedUp = (e) => (e.contributions || []).some((c) => c.userId === S.me.id);
+  const signedUp = (e) => (e.contributions || []).some((c) => c.mine || c.userId === S.me.id);
   const pendingCount = () => pendingPolls().length + foodPolls().filter((e) => !signedUp(e)).length;
 
   // ---------- Routing ----------
   function readHash() {
     const [view, arg] = location.hash.replace(/^#\/?/, '').split('/');
     if (view === 'reset' && arg) { S.resetToken = arg; S.authMode = 'reset'; return; }
-    if (['calendar', 'polls', 'members', 'prayer', 'meals'].includes(view)) S.view = view;
+    if (['calendar', 'polls', 'members', 'prayer', 'meals', 'topics'].includes(view)) S.view = view;
+    if (view === 'topics' && arg) S.pendingTopic = arg;
     if (view === 'meals' && arg) S.pendingTrain = arg;
     if (view === 'prayer' && arg) S.pendingPrayer = arg;
     if (view === 'calendar' && arg && /^\d{4}-\d{2}-\d{2}$/.test(arg)) { S.selected = arg; const d = parseYmd(arg); S.month = new Date(d.getFullYear(), d.getMonth(), 1); }
@@ -279,13 +286,14 @@
     else if (S.view === 'polls') body = renderPolls();
     else if (S.view === 'prayer') body = renderPrayer();
     else if (S.view === 'meals') body = renderMeals();
+    else if (S.view === 'topics') body = renderTopics();
     else body = renderMembers();
     $app.innerHTML = `
       <header class="topbar">
         <div class="brand"><img src="/icon.svg?v=2" alt=""><span>${esc(S.config.appName)}</span></div>
         <div class="segmented" role="tablist" aria-label="Sections">
           <span class="thumb" style="width:calc(${100 / tabs.length}% - ${4 / tabs.length}px);transform:translateX(${idx * 100}%)"></span>
-          ${tabs.map(([k, label]) => `<button role="tab" aria-selected="${S.view === k}" data-action="nav" data-view="${k}">${label}${k === 'polls' && pend ? `<span class="badge">${pend}</span>` : ''}</button>`).join('')}
+          ${tabs.map(([k, label]) => `<button role="tab" aria-selected="${S.view === k}" data-action="nav" data-view="${k}">${label}${tabBadge(k)}</button>`).join('')}
         </div>
         <div class="right">
           <button class="group-switch" data-action="group-menu" aria-haspopup="menu" aria-label="Current group: ${esc(g.name)}. Switch groups">
@@ -298,7 +306,7 @@
       </header>
       <main class="page fade-in">${body}</main>
       <nav class="tabbar" role="tablist" aria-label="Sections">
-        ${tabs.map(([k, label, icon]) => `<button role="tab" aria-selected="${S.view === k}" data-action="nav" data-view="${k}">${icon}<span>${label}</span>${k === 'polls' && pend ? `<span class="badge">${pend}</span>` : ''}</button>`).join('')}
+        ${tabs.map(([k, label, icon]) => `<button role="tab" aria-selected="${S.view === k}" data-action="nav" data-view="${k}">${icon}<span>${label}</span>${tabBadge(k)}</button>`).join('')}
       </nav>`;
     if (TOUR) requestAnimationFrame(tourPlace);
     else if (S.loaded && !S.me.tourDone && !S.sheet && !S.tourChecked) { S.tourChecked = true; setTimeout(() => startTour(false), 450); }
@@ -317,6 +325,7 @@
       { el: () => document.querySelector('.title-row [data-action="new-event"]'), view: 'calendar', title: 'Add an event', text: 'Add a title, date, time, place and cost. Turn on <b>Pitch-in</b> to let people sign up for what they\u2019re bringing. The group gets an email about it.' },
       { el: () => tabEl('polls'), view: 'polls', title: 'Polls', text: 'Can\u2019t agree on a date? Start a poll with a few options and everyone marks <b>Yes</b>, <b>Maybe</b> or <b>No</b>. Polls waiting on you show a red badge and sit at the top.' },
     ];
+    if (showTab('topics')) steps.push({ el: () => tabEl('topics'), view: 'topics', title: 'Discussions', text: 'Start a topic and talk it through together. Topics with new replies you haven\u2019t read show up at the top, with a badge on the tab.' });
     if (showTab('meals')) steps.push({ el: () => tabEl('meals'), view: 'meals', title: 'Meal Trains', text: 'When a family needs support, start a meal train and share its link. Anyone can sign up for a day, even without an account, and gets the address and a reminder by email.' });
     if (showTab('prayer')) steps.push({ el: () => tabEl('prayer'), view: 'prayer', title: 'Prayer Requests', text: 'Share a request with the group, and post updates as things change. Everyone can comment to offer encouragement.' });
     if (showTab('members')) steps.push({ el: () => tabEl('members'), view: 'members', title: 'Members', text: `See who\u2019s in the group and tap anyone to call, text or email them.${feat('members') ? '' : ' (This tab is hidden from regular members right now.)'}` });
@@ -490,25 +499,50 @@
   }
 
   // ---------- Polls ----------
+  const POLL_KINDS = { dates: ['Dates', 'Find a date that works'], pitchin: ['Pitch-in', 'Who’s bringing what'], choice: ['Multiple choice', 'Ask the group anything'] };
+  const anonPill = (p) => (p.anonymous || p.bringAnon ? `<span class="pill" title="Anonymous responses">${I.eye.replace('<svg', '<svg width="12" height="12"')} Anonymous</span>` : '');
+  const topChoice = (p) => { let best = null; for (const o of p.options) if (o.votes.length && (!best || o.votes.length > best.votes.length)) best = o; return best; };
   function renderPolls() {
-    const open = S.polls.filter((p) => p.status === 'open'), done = S.polls.filter((p) => p.status !== 'open');
+    const active = S.polls.filter((p) => p.status === 'open'), done = S.polls.filter((p) => p.status !== 'open');
     const n = S.members.length;
+    const respPill = (p) => p.status === 'scheduled' ? '<span class="pill blue">Scheduled</span>' : p.status === 'closed' ? '<span class="pill">Closed</span>'
+      : p.responded ? `<span class="pill green">${p.type === 'pitchin' ? 'Signed up' : p.type === 'choice' ? 'Answered' : 'Voted'}</span>`
+      : `<span class="pill orange">${p.type === 'pitchin' ? 'Sign up' : p.type === 'choice' ? 'Answer' : 'Vote'}</span>`;
+    const progress = (p) => `<div><div class="progress" aria-hidden="true"><i style="width:${n ? Math.min(100, Math.round((p.responderCount / n) * 100)) : 0}%"></i></div></div>`;
     const card = (p) => {
-      const responded = p.responders.some((r) => r.userId === S.me.id);
+      if (p.type === 'choice') {
+        const top = topChoice(p), total = p.responderCount;
+        return `<button class="poll-card" data-action="open-poll" data-id="${esc(p.id)}">
+          <div class="top"><div><h3>${esc(p.title)}</h3><div class="by">${esc(p.createdByName)} · ${p.options.length} answers${p.multi ? ' · pick any' : ''}</div></div>
+            <span class="pills">${anonPill(p)}${respPill(p)}</span></div>
+          <div class="choice-preview">${p.options.slice(0, 3).map((o) => { const pct = total ? Math.round((o.votes.length / total) * 100) : 0;
+            return `<div class="cp-row${o.mine ? ' mine' : ''}"><span class="cp-bar" style="width:${pct}%"></span><span class="cp-text">${esc(o.text)}</span><span class="cp-n">${o.votes.length}</span></div>`; }).join('')}
+            ${p.options.length > 3 ? `<div class="small muted">+${p.options.length - 3} more</div>` : ''}</div>
+          <div class="foot"><span>${p.responderCount} of ${n} answered</span><span>${top ? `Leading: ${esc(top.text)}` : ''}</span></div>
+        </button>`;
+      }
+      if (p.type === 'pitchin') {
+        const flat = (p.contributions || []).flatMap((c) => c.items.map((it) => it.category));
+        const cats = BRING_CATS.map((c) => [c, flat.filter((x) => x === c).length]).filter(([, k]) => k);
+        return `<button class="poll-card food-card" data-action="open-poll" data-id="${esc(p.id)}">
+          <div class="top"><div><h3>${esc(p.title)}</h3><div class="by">Pitch-in · ${esc(p.createdByName)}${p.location ? ' · ' + esc(p.location) : ''}</div></div>
+            <span class="pills"><span class="pill purple">Pitch-in</span>${anonPill(p)}${respPill(p)}</span></div>
+          <div class="food-cats" style="margin:4px 0">${cats.length ? cats.map(([c, k]) => `<span class="pill">${esc(c)} · ${k}</span>`).join('') : '<span class="small muted">Nobody has signed up yet</span>'}</div>
+          <div class="foot"><span>${flat.length} item${flat.length === 1 ? '' : 's'} from ${p.responderCount} ${p.responderCount === 1 ? 'person' : 'people'}</span><span>Not linked to an event</span></div>
+        </button>`;
+      }
       const best = bestOption(p);
       const chosen = p.options.find((o) => o.id === p.scheduledOptionId);
       const tiles = (chosen ? [chosen] : p.options.slice(0, 5)).map((o) => `<div class="date-tile"><div class="m">${esc(monAbbr(o.date))}</div><div class="d">${parseYmd(o.date).getDate()}</div></div>`).join('');
       return `<button class="poll-card" data-action="open-poll" data-id="${esc(p.id)}">
         <div class="top">
           <div><h3>${esc(p.title)}</h3><div class="by">${esc(p.createdByName)} · ${p.options.length} option${p.options.length > 1 ? 's' : ''}</div></div>
-          <span class="pills">${p.pitchIn ? '<span class="pill purple">Pitch-in</span>' : ''}${p.status === 'open' ? (responded ? '<span class="pill green">Voted</span>' : '<span class="pill orange">Vote</span>') : '<span class="pill blue">Scheduled</span>'}</span>
+          <span class="pills">${p.pitchIn ? '<span class="pill purple">Pitch-in</span>' : ''}${anonPill(p)}${respPill(p)}</span>
         </div>
         <div class="mini-tiles">${tiles}${!chosen && p.options.length > 5 ? `<span class="more">+${p.options.length - 5}</span>` : ''}</div>
-        <div>
-          <div class="progress" aria-hidden="true"><i style="width:${n ? Math.round((p.responders.length / n) * 100) : 0}%"></i></div>
-        </div>
+        ${progress(p)}
         <div class="foot">
-          <span>${p.responders.length} of ${n} responded</span>
+          <span>${p.responderCount} of ${n} responded</span>
           <span>${chosen ? `${esc(fmtShort(chosen.date))}${chosen.time ? ' · ' + esc(fmtWhenTime(chosen)) : ''}` : best ? `Leading: ${esc(fmtShort(best.date))}` : ''}</span>
         </div>
       </button>`;
@@ -521,7 +555,7 @@
       return `<button class="poll-card food-card" data-action="open-food" data-id="${esc(e.id)}">
         <div class="top">
           <div><h3>${esc(e.title)}</h3><div class="by">Food sign-up · ${esc(e.createdByName)}</div></div>
-          <span class="pills"><span class="pill purple">Pitch-in</span>${signedUp(e) ? '<span class="pill green">Signed up</span>' : '<span class="pill orange">Sign up</span>'}</span>
+          <span class="pills"><span class="pill purple">Pitch-in</span>${anonPill(e)}${signedUp(e) ? '<span class="pill green">Signed up</span>' : '<span class="pill orange">Sign up</span>'}</span>
         </div>
         <div class="food-mid">
           <div class="date-tile"><div class="m">${esc(monAbbr(e.date))}</div><div class="d">${parseYmd(e.date).getDate()}</div></div>
@@ -533,28 +567,25 @@
         </div>
       </button>`;
     };
+    const needPolls = active.filter((p) => !p.responded), needFood = food.filter((e) => !signedUp(e));
+    const donePolls = active.filter((p) => p.responded), doneFood = food.filter(signedUp);
+    const needCount = needPolls.length + needFood.length;
+    let html = '';
+    if (needCount) html += `<div class="section-title need-title" style="margin-top:4px">Needs your response <span class="badge-inline">${needCount}</span></div>
+      <div class="poll-grid">${needPolls.map(card).join('')}${needFood.map(foodCard).join('')}</div>`;
+    else if (active.length || food.length) html += `<div class="all-caught-up">${I.check.replace('<svg', '<svg width="18" height="18"')} You’re all caught up — nothing needs your response.</div>`;
+    if (donePolls.length) html += `<div class="section-title"${needCount ? '' : ' style="margin-top:4px"'}>Open polls</div><div class="poll-grid">${donePolls.map(card).join('')}</div>`;
+    if (doneFood.length) html += `<div class="section-title">Pitch-in sign-ups</div><div class="poll-grid">${doneFood.map(foodCard).join('')}</div>`;
+    if (!active.length && !food.length) html += `
+      <div class="empty">${I.poll}<div>No open polls.</div><div class="small" style="margin-top:4px">Find a date, plan a pitch-in, or ask the group a question.</div>
+        <button class="btn sm tinted" data-action="new-poll">${I.plus.replace('<svg', '<svg width="15" height="15"')} New Poll</button></div>`;
     return `
       <div class="title-row">
-        <div><h1 class="large-title">Polls</h1><div class="sub">Pick dates together and sign up for pitch-ins.</div></div>
+        <div><h1 class="large-title">Polls</h1><div class="sub">Pick dates, plan pitch-ins and ask the group.</div></div>
         <button class="btn sm" data-action="new-poll">${I.plus.replace('<svg', '<svg width="16" height="16"')} New Poll</button>
       </div>
-      ${(() => {
-        const votedOn = (p) => p.responders.some((r) => r.userId === S.me.id);
-        const needPolls = open.filter((p) => !votedOn(p)), needFood = food.filter((e) => !signedUp(e));
-        const donePolls = open.filter(votedOn), doneFood = food.filter(signedUp);
-        const needCount = needPolls.length + needFood.length;
-        let html = '';
-        if (needCount) html += `<div class="section-title need-title" style="margin-top:4px">Needs your response <span class="badge-inline">${needCount}</span></div>
-          <div class="poll-grid">${needPolls.map(card).join('')}${needFood.map(foodCard).join('')}</div>`;
-        if (donePolls.length) html += `<div class="section-title">${needCount ? 'Open polls' : 'Open polls'}</div><div class="poll-grid">${donePolls.map(card).join('')}</div>`;
-        if (doneFood.length) html += `<div class="section-title">Pitch-in sign-ups</div><div class="poll-grid">${doneFood.map(foodCard).join('')}</div>`;
-        if (!open.length && !food.length) html += `
-          <div class="empty">${I.poll}<div>No open polls.</div><div class="small" style="margin-top:4px">Trying to find a date? Start a poll and let everyone vote.</div>
-            <button class="btn sm tinted" data-action="new-poll">${I.plus.replace('<svg', '<svg width="15" height="15"')} New Poll</button></div>`;
-        else if (!needCount) html = `<div class="all-caught-up">${I.check.replace('<svg', '<svg width="18" height="18"')} You\u2019re all caught up — nothing needs your response.</div>` + html;
-        return html.replace('<div class="section-title">Open polls', needCount ? '<div class="section-title">Open polls' : '<div class="section-title" style="margin-top:4px">Open polls');
-      })()}
-      ${done.length ? `<div class="section-title">Scheduled</div><div class="poll-grid">${done.map(card).join('')}</div>` : ''}`;
+      ${html}
+      ${done.length ? `<div class="section-title">Finished</div><div class="poll-grid">${done.map(card).join('')}</div>` : ''}`;
   }
   function score(o) { return o.votes.reduce((s, v) => s + (v.answer === 'yes' ? 2 : v.answer === 'maybe' ? 1 : 0), 0); }
   function bestOption(p) {
@@ -675,6 +706,62 @@
     toast((await copyText(`${text} ${t.publicUrl}`)) ? 'Link copied — paste it in a text, email or post' : 'Couldn\u2019t copy the link');
   }
 
+  // ---------- Discussions ----------
+  function renderTopics() {
+    const list = S.topics || [];
+    const unread = list.filter((t) => t.unread).sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
+    const rest = list.filter((t) => !t.unread); // already newest first
+    const card = (t) => `<button class="card topic-card${t.unread ? ' unread' : ''}" data-action="open-topic" data-id="${esc(t.id)}">
+        <div class="tc-top">${t.unread ? '<span class="unread-dot" aria-label="Unread"></span>' : ''}<h3>${esc(t.title)}</h3></div>
+        <div class="tc-by">${avatar(t.createdBy, t.createdByName, 'xs')}<span>${esc(t.createdByName)} · ${esc(fmtStamp(t.createdAt))}</span></div>
+        ${t.lastComment ? `<p class="tc-preview"><b>${esc(t.lastByName && t.lastBy !== S.me.id ? t.lastByName.split(' ')[0] : (S.members.find((m) => m.id === t.lastCommentBy)?.name || '').split(' ')[0] || 'Latest')}:</b> ${esc(t.lastComment)}</p>`
+          : t.body ? `<p class="tc-preview">${esc(t.body.slice(0, 180))}</p>` : ''}
+        <div class="tc-foot">${I.message.replace('<svg', '<svg width="13" height="13"')}<span>${t.commentCount ? `${t.commentCount} ${t.commentCount === 1 ? 'reply' : 'replies'}` : 'No replies yet'}</span>${t.commentCount ? `<span>· ${esc(ago(t.lastActivity))}</span>` : ''}</div>
+      </button>`;
+    return `
+      <div class="title-row">
+        <div><h1 class="large-title">Discussions</h1><div class="sub">${unread.length ? `${unread.length} topic${unread.length === 1 ? '' : 's'} with something new` : 'Talk things through together.'}</div></div>
+        <button class="btn sm" data-action="new-topic">${I.plus.replace('<svg', '<svg width="16" height="16"')} New Topic</button>
+      </div>
+      <div style="max-width:720px">
+        ${unread.length ? `<div class="section-title need-title" style="margin-top:4px">Unread <span class="badge-inline">${unread.length}</span></div><div class="topic-list">${unread.map(card).join('')}</div>` : ''}
+        ${rest.length ? `<div class="section-title"${unread.length ? '' : ' style="margin-top:4px"'}>${unread.length ? 'All topics' : 'Topics'}</div><div class="topic-list">${rest.map(card).join('')}</div>` : ''}
+        ${!list.length ? `<div class="empty">${I.chat}<div>No discussions yet.</div><div class="small" style="margin-top:4px">Start a topic — a question, an idea, or something from this week’s study.</div>
+          <button class="btn sm" style="margin-top:14px" data-action="new-topic">New Topic</button></div>` : ''}
+      </div>`;
+  }
+  async function openTopic(id) {
+    const t = (S.topics || []).find((x) => x.id === id);
+    if (t) t.unread = false;
+    S.topicDetail = S.topicDetail || {};
+    if (!S.topicDetail[id] && t) S.topicDetail[id] = { ...t, comments: null };
+    openSheet('topic', { id }); history.replaceState(null, '', '#topics/' + id); render();
+    try {
+      const r = await api('GET', gp(`/topics/${id}`));
+      S.topicDetail[id] = r.topic;
+      if (S.sheet?.kind === 'topic' && S.sheet.id === id) refreshSheet();
+    } catch (ex) { toast(ex.message); }
+  }
+  function upsertTopic(t) {
+    S.topicDetail = S.topicDetail || {}; S.topicDetail[t.id] = t;
+    S.topics = S.topics || [];
+    const summary = { ...t, comments: undefined, unread: false, lastByName: S.members.find((m) => m.id === t.lastBy)?.name || '' };
+    const i = S.topics.findIndex((x) => x.id === t.id);
+    if (i >= 0) S.topics[i] = summary; else S.topics.unshift(summary);
+  }
+  function topicComment(t, c) {
+    const mine = c.userId === S.me.id, editing = S.sheet?.editComment === c.id, op = c.userId === t.createdBy;
+    return `<div class="comment" data-cid="${esc(c.id)}">
+      ${avatar(c.userId, c.name)}
+      <div class="cm-body">
+        <div class="cm-meta"><b>${esc(c.name)}${mine ? ' <span class="muted">(you)</span>' : ''}</b>${op ? '<span class="pill">Started topic</span>' : ''}<small>${esc(ago(c.at))}${c.editedAt ? ' · Edited' : ''}</small></div>
+        ${editing ? `<form class="tc-edit" data-tid="${esc(t.id)}" data-cid="${esc(c.id)}"><textarea name="text" maxlength="4000" aria-label="Edit comment">${esc(c.text)}</textarea>
+            <div class="cm-actions"><button type="button" class="link-btn" data-action="cancel-edit-comment">Cancel</button><button type="submit" class="btn sm">Save</button></div></form>`
+          : `<div class="cm-text">${esc(c.text)}</div>
+            ${canModify(c.userId) ? `<div class="cm-actions"><button class="link-btn" data-action="edit-comment" data-cid="${esc(c.id)}">Edit</button><button class="link-btn danger" data-action="delete-tcomment" data-tid="${esc(t.id)}" data-cid="${esc(c.id)}">Delete</button></div>` : ''}`}
+      </div></div>`;
+  }
+
   // ---------- Onboarding (no groups yet) ----------
   function renderOnboarding() {
     closeSheet(true);
@@ -756,7 +843,7 @@
   async function switchGroup(gid) {
     closeMenu(); closeSheet(true);
     S.gid = gid; store.set('sg_group', gid);
-    S.loaded = false; S.events = []; S.polls = []; S.members = []; S.trains = []; S.prayers = [];
+    S.loaded = false; S.events = []; S.polls = []; S.members = []; S.trains = []; S.prayers = []; S.topics = []; S.topicDetail = {};
     render();
     await loadAll();
     render();
@@ -827,7 +914,7 @@
   }
   function refreshSheet() {
     const sheet = $sheetRoot.querySelector('.sheet');
-    if (!sheet || !S.sheet || ['event-form', 'poll-form', 'group-new', 'group-join', 'group-edit', 'profile', 'prayer-form', 'meal-form', 'meal-signup'].includes(S.sheet.kind)) return;
+    if (!sheet || !S.sheet || ['event-form', 'poll-form', 'group-new', 'group-join', 'group-edit', 'profile', 'prayer-form', 'meal-form', 'meal-signup', 'topic-form'].includes(S.sheet.kind)) return;
     const body = sheet.querySelector('.sheet-body'), top = body ? body.scrollTop : 0;
     const html = sheetHtml();
     if (!html) return closeSheet();
@@ -841,6 +928,7 @@
     if (S.view === 'polls' && /^#polls\/./.test(location.hash)) history.replaceState(null, '', '#polls');
     if (S.view === 'prayer' && /^#prayer\/./.test(location.hash)) history.replaceState(null, '', '#prayer');
     if (S.view === 'meals' && /^#meals\/./.test(location.hash)) history.replaceState(null, '', '#meals');
+    if (S.view === 'topics' && /^#topics\/./.test(location.hash)) history.replaceState(null, '', '#topics');
     if (!bd) return;
     if (instant) { $sheetRoot.innerHTML = ''; return; }
     bd.classList.add('closing');
@@ -902,20 +990,57 @@
     }
     if (s.kind === 'poll-form') {
       const p = s.id ? S.polls.find((x) => x.id === s.id) : null;
-      const d = p || { title: '', location: '', cost: null, description: '', options: [{ date: '', time: '' }, { date: '', time: '' }] };
-      const opts = d.options.map((o) => ({ id: o.id || '', date: o.date, time: o.time, tz: o.tz }));
-      return `<form autocomplete="off" novalidate>${head(p ? 'Edit Poll' : 'New Poll', 'Cancel', p ? 'Save' : 'Create')}
-        <div class="sheet-body">
-          <div class="group">
-            <div class="row"><input name="title" placeholder="What are we planning?" maxlength="120" value="${esc(d.title)}" aria-label="Title" required></div>
-            <div class="row"><input name="location" placeholder="Location" maxlength="200" value="${esc(d.location)}" aria-label="Location"></div>
+      const type = p ? p.type : (s.type || 'dates'), dr = s.draft || {};
+      const d = p || { title: dr.title || '', location: dr.location || '', cost: null, description: dr.description || '', anonymous: !!dr.anonymous,
+        options: type === 'choice' ? [{ text: '' }, { text: '' }] : [{ date: '', time: '' }, { date: '', time: '' }] };
+      const anonRow = `<div class="group" style="margin-top:22px">
+          <div class="row"><span>Anonymous responses<small class="row-sub">${type === 'pitchin' ? 'Everyone sees what’s coming, but not who’s bringing it' : 'Everyone sees totals, but not who answered what'}</small></span>
+            <label class="switch"><input type="checkbox" name="anonymous" ${d.anonymous ? 'checked disabled' : ''}><span></span></label></div>
+        </div>${p?.anonymous ? '<p class="group-foot">Responses were collected anonymously, so this can’t be turned off.</p>' : ''}`;
+      const typePicker = p ? '' : `<div class="segmented poll-type" role="tablist" aria-label="Poll type">
+          <span class="thumb" style="width:calc(33.333% - 1.33px);transform:translateX(${['dates', 'pitchin', 'choice'].indexOf(type) * 100}%)"></span>
+          ${Object.entries(POLL_KINDS).map(([k, [label]]) => `<button type="button" role="tab" aria-selected="${type === k}" data-action="poll-type" data-type="${k}">${label}</button>`).join('')}
+        </div><p class="group-foot poll-type-hint">${POLL_KINDS[type][1]}</p>`;
+      let body;
+      if (type === 'choice') {
+        body = `<div class="group">
+            <div class="row"><input name="title" placeholder="Ask a question" maxlength="160" value="${esc(d.title)}" aria-label="Question" required></div>
+            <div class="row stack"><textarea name="description" placeholder="More details (optional)" maxlength="4000" aria-label="Details">${esc(d.description)}</textarea></div>
+          </div>
+          <div class="group-label" style="margin-top:22px">Answers</div>
+          <div class="group" id="opt-list">
+            ${d.options.map((o) => choiceRow(o, d.options.length > 2)).join('')}
+            <div class="row button-row" data-action="add-choice" role="button" tabindex="0">${I.plus.replace('<svg', '<svg width="18" height="18"')} Add an answer</div>
+          </div>
+          ${p ? '<p class="group-foot">Adding answers keeps everyone’s votes. Rewording an answer clears the votes for that answer only.</p>' : ''}
+          <div class="group" style="margin-top:22px">
+            <div class="row"><span>Allow more than one answer</span><label class="switch"><input type="checkbox" name="multi" ${d.multi ? 'checked' : ''}><span></span></label></div>
+          </div>`;
+      } else if (type === 'pitchin') {
+        const evs = S.events.filter((e) => e.date >= todayStr()).slice(0, 40);
+        body = `<div class="group">
+            <div class="row"><input name="title" placeholder="What’s the pitch-in for?" maxlength="160" value="${esc(d.title)}" aria-label="Title" required></div>
+            <div class="row"><input name="location" placeholder="Location (optional)" maxlength="200" value="${esc(d.location || '')}" aria-label="Location"></div>
+            <div class="row stack"><textarea name="description" placeholder="Details — what’s needed, how many people (optional)" maxlength="4000" aria-label="Details">${esc(d.description)}</textarea></div>
+          </div>
+          ${p ? '' : `<div class="group-label" style="margin-top:22px">Calendar event</div>
+          <div class="group"><div class="row"><label for="pi-ev">Link to</label><select id="pi-ev" name="eventId" class="tz-select ev-select">
+            <option value="">No event (sign-up only)</option>
+            ${evs.map((e) => `<option value="${esc(e.id)}"${dr.eventId === e.id ? ' selected' : ''}>${esc(fmtShort(e.date))} · ${esc(e.title)}${e.pitchIn ? ' (pitch-in)' : ''}</option>`).join('')}
+          </select></div></div>
+          <p class="group-foot">Pick the event this food is for and the sign-up goes right on that event, so everything is in one place. You can also link it later.</p>`}`;
+      } else {
+        const opts = d.options.map((o) => ({ id: o.id || '', date: o.date, time: o.time, tz: o.tz }));
+        body = `<div class="group">
+            <div class="row"><input name="title" placeholder="What are we planning?" maxlength="160" value="${esc(d.title)}" aria-label="Title" required></div>
+            <div class="row"><input name="location" placeholder="Location" maxlength="200" value="${esc(d.location || '')}" aria-label="Location"></div>
             <div class="row"><label for="p-cost">Cost</label><span class="prefix">$</span><input id="p-cost" name="cost" inputmode="decimal" placeholder="0.00 (optional)" value="${esc(d.cost ?? '')}"></div>
           </div>
           <div class="group">
             <div class="row stack"><textarea name="description" placeholder="Description (optional)" maxlength="4000" aria-label="Description">${esc(d.description)}</textarea></div>
           </div>
           <div class="group" style="margin-top:22px">
-            <div class="row"><span>Pitch-in<small class="row-sub">Let people sign up for what they\u2019re bringing</small></span><label class="switch"><input type="checkbox" name="pitchIn" ${d.pitchIn ? 'checked' : ''}><span></span></label></div>
+            <div class="row"><span>Pitch-in<small class="row-sub">Let people sign up for what they’re bringing</small></span><label class="switch"><input type="checkbox" name="pitchIn" ${d.pitchIn ? 'checked' : ''}><span></span></label></div>
           </div>
           <div class="group-label" style="margin-top:22px">Date options</div>
           <div class="group" id="opt-list">
@@ -923,22 +1048,39 @@
             <div class="row button-row" data-action="add-opt" role="button" tabindex="0">${I.plus.replace('<svg', '<svg width="18" height="18"')} Add another date</div>
           </div>
           <p class="group-foot">${p
-            ? 'Adding dates keeps everyone\u2019s responses. Changing the date or time of an option clears the responses for that option only, since people answered for a different time. Removing an option removes its responses.'
-            : 'Add at least two dates. Members mark each one Yes, Maybe, or No, and you\u2019ll see who answered. When you pick the final date, it goes on the calendar and everyone gets an email.'}</p>
-          <div id="sheet-msg"></div>
-        </div></form>`;
+            ? 'Adding dates keeps everyone’s responses. Changing the date or time of an option clears the responses for that option only, since people answered for a different time. Removing an option removes its responses.'
+            : 'Add at least two dates. Members mark each one Yes, Maybe, or No. When you pick the final date, it goes on the calendar and everyone gets an email.'}</p>`;
+      }
+      const verb = p ? 'Save' : type === 'pitchin' ? 'Create' : 'Create';
+      return `<form autocomplete="off" novalidate>${head(p ? 'Edit Poll' : 'New Poll', 'Cancel', verb)}
+        <div class="sheet-body">${typePicker}${body}${anonRow}<div id="sheet-msg"></div></div></form>`;
+    }
+    if (s.kind === 'poll-link') {
+      const p = S.polls.find((x) => x.id === s.id);
+      if (!p) return '';
+      const evs = S.events.filter((e) => e.date >= todayStr());
+      return `${head('Link to Event', 'Cancel')}
+        <div class="sheet-body">
+          <p class="group-foot" style="margin-top:0">Everyone’s sign-ups for “${esc(p.title)}” will move onto the event you pick, and this sign-up will be removed from Polls.</p>
+          <div class="group people">${evs.length ? evs.map((e) => `<button class="person person-btn" data-action="link-event" data-poll="${esc(p.id)}" data-event="${esc(e.id)}">
+              <div class="date-tile" style="width:40px"><div class="m">${esc(monAbbr(e.date))}</div><div class="d">${parseYmd(e.date).getDate()}</div></div>
+              <span class="nm">${esc(e.title)}<small>${esc(fmtShort(e.date))}${e.time ? ' · ' + esc(fmtWhenTime(e)) : ''}${e.pitchIn ? ' · already a pitch-in' : ''}</small></span>
+              <span class="chev">${I.right.replace('<svg', '<svg width="14" height="14"')}</span></button>`).join('')
+            : '<div class="person"><div class="nm muted">No upcoming events. Add the event to the calendar first.</div></div>'}</div>
+        </div>`;
     }
     if (s.kind === 'poll') {
       const p = S.polls.find((x) => x.id === s.id);
       if (!p) return '';
+      if (p.type === 'choice' || p.type === 'pitchin') return otherPollSheet(p);
       const open = p.status === 'open', owner = canModify(p.createdBy);
       const best = open ? bestOption(p) : null;
       const chosen = p.options.find((o) => o.id === p.scheduledOptionId);
       const respondedIds = new Set(p.responders.map((r) => r.userId));
-      const waiting = S.members.filter((m) => !respondedIds.has(m.id));
+      const waiting = p.anonymous ? [] : S.members.filter((m) => !respondedIds.has(m.id));
       const kv = [['Location', p.location], ['Cost', fmtCost(p.cost)], ['Created', fmtStamp(p.createdAt)]].filter(([, v]) => v);
       const optHtml = p.options.map((o) => {
-        const mine = o.votes.find((v) => v.userId === S.me.id)?.answer || null;
+        const mine = o.mine || null;
         const by = (a) => o.votes.filter((v) => v.answer === a);
         const yes = by('yes'), maybe = by('maybe'), no = by('no');
         const cls = ['option', best && best.id === o.id && 'best', chosen && chosen.id === o.id && 'chosen', chosen && chosen.id !== o.id && 'dim'].filter(Boolean).join(' ');
@@ -949,14 +1091,14 @@
             <div class="when"><b>${esc(parseYmd(o.date).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' }))}</b><span>${o.time ? esc(fmtWhenTime(o)) : 'Time TBD'}${localEquivalent(o) ? `<small class="tz-note">${esc(localEquivalent(o))}</small>` : ''}</span></div>
             <div class="tally">
               ${chosen && chosen.id === o.id ? '<span class="pill blue">Scheduled</span>' : best && best.id === o.id ? '<span class="pill green">Most popular</span>' : ''}
-              <span class="avatar-stack">${yes.slice(0, 4).map((v) => avatar(v.userId, v.name, 'xs')).join('')}</span>
+              ${p.anonymous ? '' : `<span class="avatar-stack">${yes.slice(0, 4).map((v) => avatar(v.userId, v.name, 'xs')).join('')}</span>`}
             </div>
           </div>
           ${open ? `<div class="choice" role="group" aria-label="Your answer">${btn('yes', 'Yes', I.check)}${btn('maybe', 'Maybe', I.q)}${btn('no', 'No', I.x)}</div>` : ''}
           ${o.votes.length ? `<div class="who">
-            ${yes.length ? `<div><span class="k yes">Yes ${yes.length}</span><span class="v">${yes.map((v) => esc(v.name)).join(', ')}</span></div>` : ''}
-            ${maybe.length ? `<div><span class="k maybe">Maybe ${maybe.length}</span><span class="v">${maybe.map((v) => esc(v.name)).join(', ')}</span></div>` : ''}
-            ${no.length ? `<div><span class="k no">No ${no.length}</span><span class="v">${no.map((v) => esc(v.name)).join(', ')}</span></div>` : ''}
+            ${yes.length ? `<div><span class="k yes">Yes ${yes.length}</span><span class="v">${p.anonymous ? '' : yes.map((v) => esc(v.name)).join(', ')}</span></div>` : ''}
+            ${maybe.length ? `<div><span class="k maybe">Maybe ${maybe.length}</span><span class="v">${p.anonymous ? '' : maybe.map((v) => esc(v.name)).join(', ')}</span></div>` : ''}
+            ${no.length ? `<div><span class="k no">No ${no.length}</span><span class="v">${p.anonymous ? '' : no.map((v) => esc(v.name)).join(', ')}</span></div>` : ''}
           </div>` : '<div class="small muted">No responses yet.</div>'}
           ${open && owner ? `<button class="btn sm tinted" style="justify-self:start" data-action="schedule" data-poll="${esc(p.id)}" data-opt="${esc(o.id)}">${I.cal.replace('<svg', '<svg width="16" height="16"')} Schedule this date</button>` : ''}
         </div>`;
@@ -965,7 +1107,8 @@
         <div class="sheet-body">
           <div class="detail-hero" style="padding-bottom:16px">
             <h2>${esc(p.title)}</h2>
-            <div class="w">Started by ${esc(p.createdByName)}</div>
+            <div class="w">Date poll · Started by ${esc(p.createdByName)}</div>
+            ${p.anonymous ? `<div class="anon-note">${I.eye.replace('<svg', '<svg width="14" height="14"')} Anonymous \u2014 only totals are shown</div>` : ''}
           </div>
           ${chosen ? `<div class="group" style="margin-bottom:22px"><div class="row button-row" data-action="goto-date" data-date="${chosen.date}">${I.check.replace('<svg', '<svg width="18" height="18"')} On the calendar · ${esc(fmtShort(chosen.date))}${chosen.time ? ' · ' + esc(fmtWhenTime(chosen)) : ''}<span class="chev">${I.right.replace('<svg', '<svg width="14" height="14"')}</span></div></div>` : ''}
           ${kv.length ? `<div class="group kv">${kv.map(([k, v]) => `<div class="row"><span>${k}</span><span class="v">${esc(v)}</span></div>`).join('')}</div>` : ''}
@@ -973,10 +1116,11 @@
           <div class="group-label" style="margin-top:26px">${open ? 'Mark which dates work for you' : 'Results'}</div>
           <div class="options">${optHtml}</div>
           ${p.pitchIn ? bringSection('poll', p, open) : ''}
-          <div class="group-label" style="margin-top:26px">Responses · ${p.responders.length} of ${S.members.length}</div>
+          ${responsesBlock(p)}
+          ${p.anonymous ? '' : `<div class="group-label" style="margin-top:26px">Responses · ${p.responders.length} of ${S.members.length}</div>
           <div class="group people">
             ${p.responders.length ? p.responders.map((r) => `<div class="person">${avatar(r.userId, r.name)}<div class="nm">${esc(r.name)}${r.userId === S.me.id ? ' <span class="muted">(you)</span>' : ''}<small>Responded ${esc(fmtStamp(r.at))}</small></div><span class="pill green">Replied</span></div>`).join('') : '<div class="person"><div class="nm muted">No one has replied yet.</div></div>'}
-          </div>
+          </div>`}
           ${waiting.length ? `<div class="group-label" style="margin-top:22px">Waiting on · ${waiting.length}</div>
           <div class="group people">${waiting.map((m) => `<div class="person">${avatar(m.id, m.name)}<div class="nm">${esc(m.name)}${m.id === S.me.id ? ' <span class="muted">(you)</span>' : ''}</div><span class="pill">No reply</span></div>`).join('')}</div>` : ''}
           ${owner ? `<div class="actions">${open ? `<button class="btn tinted block" data-action="edit-poll" data-id="${esc(p.id)}">Edit Poll</button>` : ''}<button class="btn danger block" data-action="delete-poll" data-id="${esc(p.id)}">Delete Poll</button></div>` : ''}
@@ -1026,6 +1170,7 @@
             ${sw('members', 'Members Tab', 'Everyone can see the member list and contact info')}
             ${sw('prayer', 'Prayer Requests', 'Members share requests and post comments and updates')}
             ${sw('meals', 'Meal Trains', 'Organize meals for a family, with a sign-up link anyone can use')}
+            ${sw('topics', 'Discussions', 'Start topics and talk them through with comments')}
           </div>
           <p class="group-foot">Changes apply to everyone in ${esc(g.name)} right away. When the Members tab is off, organizers still see it and member contact info is hidden from everyone else. Turning off Prayer Requests hides them but keeps them, so they come back if you turn it on again.</p>
         </div>`;
@@ -1050,6 +1195,11 @@
           </div>
           <div class="group-label" style="margin-top:22px">Meal Trains</div>
           <div class="group">${sw('meal', 'New meal trains', 'When someone starts a meal train')}</div>
+          <div class="group-label" style="margin-top:22px">Discussions</div>
+          <div class="group">
+            ${sw('topic', 'New topics', 'When someone starts a discussion')}
+            ${sw('topicComment', 'Replies', 'Every new comment on a topic')}
+          </div>
           ${prayerOff ? '<p class="group-foot">Prayer Requests is turned off for this group, so these won\u2019t send until you turn it on in Features.</p>' : ''}
           <p class="group-foot">These control which emails go to everyone in ${esc(g.name)}. Each person can also choose which of these they get from their own profile. Password reset emails always send.</p>
         </div>`;
@@ -1203,6 +1353,43 @@
           <div id="sheet-msg"></div>
         </div></form>`;
     }
+    if (s.kind === 'topic-form') {
+      const t = s.id ? (S.topicDetail || {})[s.id] || (S.topics || []).find((x) => x.id === s.id) : { title: '', body: '' };
+      if (!t) return '';
+      return `<form autocomplete="off">${head(s.id ? 'Edit Topic' : 'New Topic', 'Cancel', s.id ? 'Save' : 'Post')}
+        <div class="sheet-body">
+          <div class="group">
+            <div class="row"><input name="title" placeholder="Topic" maxlength="160" value="${esc(t.title)}" aria-label="Topic" required></div>
+            <div class="row stack"><textarea name="body" placeholder="Start the conversation (optional)" maxlength="6000" aria-label="Details" style="min-height:140px">${esc(t.body || '')}</textarea></div>
+          </div>
+          <p class="group-foot">Everyone in ${esc(curGroup().name)} can read and reply.</p>
+          <div id="sheet-msg"></div>
+        </div></form>`;
+    }
+    if (s.kind === 'topic') {
+      const t = (S.topicDetail || {})[s.id];
+      if (!t) return '';
+      const loading = !t.comments;
+      return `${head('Discussion', 'Done')}
+        <div class="sheet-body">
+          <div class="prayer-detail">
+            <div class="pc-head">${avatar(t.createdBy, t.createdByName)}<div class="pc-who"><b>${esc(t.createdByName)}${t.createdBy === S.me.id ? ' <span class="muted">(you)</span>' : ''}</b><small>${esc(fmtStamp(t.createdAt))}${t.updatedAt ? ' · Edited' : ''}</small></div></div>
+            <h2>${esc(t.title)}</h2>
+            ${t.body ? `<div class="detail-desc" style="padding:0">${esc(t.body)}</div>` : ''}
+          </div>
+          <div class="group-label" style="margin-top:22px">Replies${t.comments?.length ? ' · ' + t.comments.length : ''}</div>
+          <div class="group comments">
+            ${loading ? '<div class="spinner" style="margin:18px auto"></div>' : t.comments.length ? t.comments.map((c) => topicComment(t, c)).join('') : '<div class="empty small" style="padding:18px;box-shadow:none">No replies yet. Start the conversation!</div>'}
+          </div>
+          <form class="comment-form tc-form" data-tid="${esc(t.id)}">
+            <textarea name="text" maxlength="4000" placeholder="Write a reply…" aria-label="Write a reply"></textarea>
+            <button type="submit" class="btn sm">Reply</button>
+          </form>
+          ${canModify(t.createdBy) ? `<div class="actions">
+            <button class="btn tinted block" data-action="edit-topic" data-id="${esc(t.id)}">Edit Topic</button>
+            <button class="btn danger block" data-action="delete-topic" data-id="${esc(t.id)}">Delete Topic</button></div>` : ''}
+        </div>`;
+    }
     if (s.kind === 'member') {
       const m = S.members.find((x) => x.id === s.id);
       if (!m) return '';
@@ -1247,7 +1434,8 @@
           <div class="group notify-types${m.notify ? '' : ' is-off'}" style="margin-top:12px">
             ${[['event', 'New events'], ['scheduled', 'Poll results', 'When a poll\u2019s final date is scheduled'], ['poll', 'New polls'],
               ...(S.groups.some((g) => g.features?.prayer) ? [['prayer', 'New prayer requests'], ['prayerComment', 'Prayer comments & updates']] : []),
-              ...(S.groups.some((g) => g.features?.meals) ? [['meal', 'New meal trains']] : [])]
+              ...(S.groups.some((g) => g.features?.meals) ? [['meal', 'New meal trains']] : []),
+              ...(S.groups.some((g) => g.features?.topics !== false) ? [['topic', 'New discussion topics'], ['topicComment', 'Discussion replies']] : [])]
               .map(([k, label, sub]) => `<div class="row"><span>${esc(label)}${sub ? `<small class="row-sub">${sub}</small>` : ''}</span><label class="switch"><input type="checkbox" data-action="toggle-pref" data-key="${k}" ${(m.notifyPrefs || {})[k] !== false ? 'checked' : ''} ${m.notify ? '' : 'disabled'}><span></span></label></div>`).join('')}
           </div>
           <p class="group-foot">Choose which emails you get. Group organizers can also turn some emails off for everyone in a group.</p>
@@ -1294,17 +1482,42 @@
         closeSheet(); render();
         toast(s.id ? 'Event updated' : 'Event added · Group notified');
       } else if (s.kind === 'poll-form') {
-        if (!v.title.trim()) { btn.disabled = false; return err('Please add a title.'); }
-        const options = readOptions(form).filter((o) => o.date);
-        if (options.length < 2) { btn.disabled = false; return err('Add at least two dates for people to vote on.'); }
-        const keys = options.map((o) => o.date + o.time);
-        if (new Set(keys).size !== keys.length) { btn.disabled = false; return err('Two options have the same date and time. Change or remove one.'); }
-        const body = { title: v.title, location: v.location, cost: v.cost, description: v.description, options, pitchIn: !!form.elements.pitchIn?.checked };
+        const existing = s.id ? S.polls.find((x) => x.id === s.id) : null;
+        const type = existing ? existing.type : (s.type || 'dates');
+        const anonymous = !!form.elements.anonymous?.checked;
+        let body;
+        if (!v.title.trim()) { btn.disabled = false; return err(type === 'choice' ? 'Please add a question.' : 'Please add a title.'); }
+        if (type === 'choice') {
+          const options = [...form.querySelectorAll('.choice-row')].map((r) => ({ id: r.dataset.id || undefined, text: r.querySelector('[name="choice"]').value.trim() })).filter((o) => o.text);
+          if (options.length < 2) { btn.disabled = false; return err('Add at least two answers for people to choose from.'); }
+          const ks = options.map((o) => o.text.toLowerCase());
+          if (new Set(ks).size !== ks.length) { btn.disabled = false; return err('Two answers are the same. Change or remove one.'); }
+          body = { type, title: v.title, description: v.description, options, multi: !!form.elements.multi?.checked, anonymous };
+        } else if (type === 'pitchin') {
+          body = { type, title: v.title, location: v.location, description: v.description, anonymous, eventId: v.eventId || undefined };
+        } else {
+          const options = readOptions(form).filter((o) => o.date);
+          if (options.length < 2) { btn.disabled = false; return err('Add at least two dates for people to vote on.'); }
+          const keys = options.map((o) => o.date + o.time);
+          if (new Set(keys).size !== keys.length) { btn.disabled = false; return err('Two options have the same date and time. Change or remove one.'); }
+          body = { type, title: v.title, location: v.location, cost: v.cost, description: v.description, options, pitchIn: !!form.elements.pitchIn?.checked, anonymous };
+        }
         const r = s.id ? await api('PUT', gp(`/polls/${s.id}`), body) : await api('POST', gp('/polls'), body);
         await loadAll();
-        S.view = 'polls'; render();
-        openSheet('poll', { id: r.poll.id }); history.replaceState(null, '', '#polls/' + r.poll.id);
-        toast(s.id ? 'Poll updated' : 'Poll created · Group notified');
+        if (r.linked) { // pitch-in went straight onto the chosen event
+          S.view = 'polls'; render(); openSheet('event', { id: r.event.id });
+          toast(`Pitch-in sign-up added to “${r.event.title}”`);
+        } else {
+          S.view = 'polls'; render();
+          openSheet('poll', { id: r.poll.id }); history.replaceState(null, '', '#polls/' + r.poll.id);
+          toast(s.id ? 'Poll updated' : 'Poll created · Group notified');
+        }
+      } else if (s.kind === 'topic-form') {
+        if (!v.title.trim()) { btn.disabled = false; return err('Please give the topic a title.'); }
+        const r = s.id ? await api('PUT', gp(`/topics/${s.id}`), { title: v.title, body: v.body }) : await api('POST', gp('/topics'), { title: v.title, body: v.body });
+        upsertTopic(r.topic);
+        S.view = 'topics'; render(); openSheet('topic', { id: r.topic.id }); history.replaceState(null, '', '#topics/' + r.topic.id);
+        toast(s.id ? 'Topic updated' : 'Topic posted');
       } else if (s.kind === 'meal-form') {
         const days = [...form.querySelectorAll('[name="day"]:checked')].map((x) => Number(x.value));
         const coordinators = [...form.querySelectorAll('[name="coord"]:checked')].map((x) => x.value);
@@ -1342,6 +1555,65 @@
   // ---------- Pitch-in ----------
   const BRING_CATS = ['Main dish', 'Side dish', 'Salad', 'Bread', 'Dessert', 'Drinks', 'Supplies', 'Other'];
   const bringCount = (list) => (list || []).reduce((n, c) => n + (c.items?.length || 0), 0);
+  function choiceRow(o, removable) {
+    return `<div class="row choice-row" data-id="${esc(o.id || '')}">
+      <button type="button" class="opt-remove" data-action="remove-choice" aria-label="Remove this answer" ${removable ? '' : 'disabled'}>${I.minus.replace('<svg', '<svg width="22" height="22"')}</button>
+      <input name="choice" maxlength="200" placeholder="Answer" value="${esc(o.text || '')}" aria-label="Answer">
+    </div>`;
+  }
+  // Anonymous polls: a simple count instead of names
+  function responsesBlock(p) {
+    if (!p.anonymous) return '';
+    const n = S.members.length;
+    return `<div class="group-label" style="margin-top:26px">Responses</div>
+      <div class="group"><div class="row" style="justify-content:space-between"><span>${p.responderCount} of ${n} ${p.type === 'pitchin' ? 'signed up' : 'responded'}</span>
+        ${p.responded ? '<span class="pill green">You responded</span>' : '<span class="pill orange">Waiting on you</span>'}</div></div>
+      <p class="group-foot">This poll is anonymous, so no one — not even organizers — can see who answered what.</p>`;
+  }
+  function otherPollSheet(p) {
+    const open = p.status === 'open', owner = canModify(p.createdBy), n = S.members.length;
+    const hero = `<div class="detail-hero" style="padding-bottom:16px">
+        <h2>${esc(p.title)}</h2>
+        <div class="w">${p.type === 'choice' ? 'Multiple choice' : 'Pitch-in'} · Started by ${esc(p.createdByName)}${p.status === 'closed' ? ' · Closed' : ''}</div>
+        ${p.anonymous ? `<div class="anon-note">${I.eye.replace('<svg', '<svg width="14" height="14"')} Anonymous — ${p.type === 'pitchin' ? 'items are shown without names' : 'only totals are shown'}</div>` : ''}
+      </div>`;
+    const kv = [['Location', p.location], ['Created', fmtStamp(p.createdAt)]].filter(([, v]) => v);
+    const desc = p.description ? `<div class="group" style="margin-top:22px"><div class="detail-desc">${esc(p.description)}</div></div>` : '';
+    let main = '';
+    if (p.type === 'choice') {
+      const total = p.responderCount, top = topChoice(p);
+      main = `<div class="group-label" style="margin-top:26px">${open ? (p.multi ? 'Choose any that apply' : 'Choose one') : 'Results'}</div>
+        <div class="group choice-list" role="${p.multi ? 'group' : 'radiogroup'}">
+        ${p.options.map((o) => {
+          const pct = total ? Math.round((o.votes.length / total) * 100) : 0, mine = !!o.mine;
+          return `<button class="choice-opt${mine ? ' mine' : ''}${top && top.id === o.id && !open ? ' winner' : ''}" ${open ? '' : 'disabled'} role="${p.multi ? 'checkbox' : 'radio'}" aria-checked="${mine}" data-action="choose" data-poll="${esc(p.id)}" data-opt="${esc(o.id)}">
+            <span class="co-bar" style="width:${pct}%"></span>
+            <span class="co-mark ${p.multi ? 'sq' : ''}">${mine ? I.check.replace('<svg', '<svg width="13" height="13"') : ''}</span>
+            <span class="co-text">${esc(o.text)}${!p.anonymous && o.votes.length ? `<small>${o.votes.map((v) => esc(v.name)).join(', ')}</small>` : ''}</span>
+            <span class="co-n">${o.votes.length}<small>${pct}%</small></span>
+          </button>`;
+        }).join('')}
+        </div>
+        <p class="group-foot">${total} of ${n} answered${open ? ' · Tap again to change your answer' : ''}</p>`;
+    } else {
+      main = bringSection('poll', p, open);
+    }
+    const people = p.anonymous ? responsesBlock(p) : `<div class="group-label" style="margin-top:26px">${p.type === 'pitchin' ? 'Signed up' : 'Answered'} · ${p.responders.length} of ${n}</div>
+      <div class="group people">${p.responders.length ? p.responders.map((r) => `<div class="person">${avatar(r.userId, r.name)}<div class="nm">${esc(r.name)}${r.userId === S.me.id ? ' <span class="muted">(you)</span>' : ''}<small>${esc(fmtStamp(r.at))}</small></div></div>`).join('') : '<div class="person"><div class="nm muted">No one yet.</div></div>'}</div>`;
+    return `${head('Poll', 'Done')}
+      <div class="sheet-body">
+        ${hero}
+        ${kv.length ? `<div class="group kv">${kv.map(([k, v]) => `<div class="row"><span>${k}</span><span class="v">${esc(v)}</span></div>`).join('')}</div>` : ''}
+        ${desc}
+        ${main}
+        ${people}
+        ${owner ? `<div class="actions">
+          ${p.type === 'pitchin' && open ? `<button class="btn tinted block" data-action="open-poll-link" data-id="${esc(p.id)}">${I.cal.replace('<svg', '<svg width="16" height="16"')} Link to Calendar Event</button>` : ''}
+          ${open ? `<button class="btn tinted block" data-action="edit-poll" data-id="${esc(p.id)}">Edit Poll</button>` : ''}
+          <button class="btn tinted block" data-action="poll-status" data-id="${esc(p.id)}">${open ? (p.type === 'pitchin' ? 'Close Sign-ups' : 'Close Poll') : 'Reopen'}</button>
+          <button class="btn danger block" data-action="delete-poll" data-id="${esc(p.id)}">Delete Poll</button></div>` : ''}
+      </div>`;
+  }
   function bringRow(it, removable) {
     return `<div class="row bring-row">
       <button type="button" class="opt-remove" data-action="bring-row-remove" aria-label="Remove this item" ${removable ? '' : 'disabled'}>${I.minus.replace('<svg', '<svg width="22" height="22"')}</button>
@@ -1351,13 +1623,14 @@
   }
   function bringSection(kind, obj, editable) {
     const list = obj.contributions || [];
-    const mine = list.find((c) => c.userId === S.me.id);
-    const flat = list.flatMap((c) => c.items.map((it) => ({ ...it, userId: c.userId, name: c.name })));
+    const mine = list.find((c) => c.mine || c.userId === S.me.id);
+    const anon = !!(obj.anonymous || obj.bringAnon);
+    const flat = list.flatMap((c) => c.items.map((it) => ({ ...it, userId: c.userId, name: c.name, mine: c.mine || c.userId === S.me.id })));
     const groups = BRING_CATS.map((cat) => [cat, flat.filter((x) => x.category === cat)]).filter(([, l]) => l.length);
     const summary = groups.length
       ? `<div class="group bring-list">${groups.map(([cat, l]) => `
           <div class="bring-cat"><span>${esc(cat)}</span><span class="pill">${l.length}</span></div>
-          ${l.map((x) => `<div class="bring-item">${avatar(x.userId, x.name, 'xs')}<span class="bi-text"><b>${esc(x.item)}</b><small>${esc(x.name)}${x.userId === S.me.id ? ' (you)' : ''}</small></span></div>`).join('')}`).join('')}
+          ${l.map((x) => `<div class="bring-item">${anon ? `<span class="avatar xs anon-av" aria-hidden="true">${x.mine ? 'You' : '?'}</span>` : avatar(x.userId, x.name, 'xs')}<span class="bi-text"><b>${esc(x.item)}</b><small>${anon ? (x.mine ? 'You' : 'Someone') : esc(x.name) + (x.mine ? ' (you)' : '')}</small></span></div>`).join('')}`).join('')}
         </div>`
       : `<div class="empty small" style="padding:18px">Nobody has signed up yet${editable ? ' — be the first!' : '.'}</div>`;
     const myItems = mine?.items?.length ? mine.items : [{ item: '', category: 'Main dish' }];
@@ -1371,7 +1644,7 @@
         </div>
       </form>` : (kind === 'poll' && obj.eventId ? `<p class="group-foot">The date is set. Add or change what you’re bringing on the calendar event.</p>` : '');
     const total = flat.length;
-    return `<div class="group-label" style="margin-top:26px">Pitch-in · who’s bringing what${total ? ` · ${total} item${total === 1 ? '' : 's'}` : ''}</div>
+    return `<div class="group-label" style="margin-top:26px">Pitch-in · ${anon ? 'what\u2019s coming' : 'who’s bringing what'}${total ? ` · ${total} item${total === 1 ? '' : 's'}` : ''}</div>
       ${summary}
       ${form ? `<div class="group-label" style="margin-top:16px">${mine ? `Your items · ${mine.items.length}` : 'What will you bring?'}</div>${form}` : ''}`;
   }
@@ -1478,6 +1751,51 @@
     },
     ics: (el) => downloadIcs(S.events.find((x) => x.id === el.dataset.id)),
     'new-poll': () => openSheet('poll-form'),
+    'poll-type': (el) => {
+      const f = $sheetRoot.querySelector('form'), val = (n) => f.querySelector(`[name="${n}"]`)?.value || '';
+      const draft = { title: val('title'), description: val('description'), location: val('location'), anonymous: !!f.querySelector('[name="anonymous"]')?.checked };
+      openSheet('poll-form', { type: el.dataset.type, draft });
+    },
+    'add-choice': (el) => {
+      const f = el.closest('form'), rows = f.querySelectorAll('.choice-row');
+      if (rows.length >= 20) return toast('That\u2019s the limit of 20 answers');
+      const tmp = document.createElement('div'); tmp.innerHTML = choiceRow({ text: '' }, true);
+      el.before(tmp.firstElementChild);
+      f.querySelectorAll('.choice-row .opt-remove').forEach((b) => { b.disabled = f.querySelectorAll('.choice-row').length <= 2; });
+      el.previousElementSibling.querySelector('input').focus();
+    },
+    'remove-choice': (el) => {
+      const f = el.closest('form');
+      if (f.querySelectorAll('.choice-row').length <= 2) return;
+      el.closest('.choice-row').remove();
+      f.querySelectorAll('.choice-row .opt-remove').forEach((b) => { b.disabled = f.querySelectorAll('.choice-row').length <= 2; });
+    },
+    choose: async (el) => {
+      const p = S.polls.find((x) => x.id === el.dataset.poll), id = el.dataset.opt;
+      const cur = p.options.filter((o) => o.mine).map((o) => o.id);
+      const next = p.multi ? (cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id]) : (cur.includes(id) ? [] : [id]);
+      p.options.forEach((o) => { o.mine = next.includes(o.id) ? 'x' : null; });
+      refreshSheet();
+      try {
+        const r = await api('POST', gp(`/polls/${p.id}/vote`), { choices: next });
+        Object.assign(p, r.poll); refreshSheet(); render();
+      } catch (ex) { toast(ex.message); await loadAll(); refreshSheet(); render(); }
+    },
+    'poll-status': async (el) => {
+      const p = S.polls.find((x) => x.id === el.dataset.id), closing = p.status === 'open';
+      if (closing && !(await ask({ title: p.type === 'pitchin' ? 'Close sign-ups?' : 'Close this poll?', message: 'No one will be able to change their answer until you reopen it.', ok: 'Close' }))) return;
+      try { const r = await api('POST', gp(`/polls/${p.id}/status`), { status: closing ? 'closed' : 'open' }); Object.assign(p, r.poll); refreshSheet(); render(); toast(closing ? 'Closed' : 'Reopened'); }
+      catch (ex) { toast(ex.message); }
+    },
+    'open-poll-link': (el) => openSheet('poll-link', { id: el.dataset.id }),
+    'link-event': async (el) => {
+      const ev = S.events.find((x) => x.id === el.dataset.event);
+      if (!(await ask({ title: `Link to \u201c${ev.title}\u201d?`, message: 'Everyone\u2019s sign-ups move onto that event and this poll is removed.', ok: 'Link' }))) return;
+      try {
+        const r = await api('POST', gp(`/polls/${el.dataset.poll}/link-event`), { eventId: ev.id });
+        await loadAll(); render(); openSheet('event', { id: r.event.id }); toast('Linked · Sign-ups are on the event now');
+      } catch (ex) { toast(ex.message); }
+    },
     'open-poll': (el) => { openSheet('poll', { id: el.dataset.id }); history.replaceState(null, '', '#polls/' + el.dataset.id); },
     'add-opt': () => {
       const form = $sheetRoot.querySelector('form'), rows = form.querySelectorAll('.opt-row');
@@ -1508,12 +1826,15 @@
     vote: async (el) => {
       const p = S.polls.find((x) => x.id === el.dataset.poll);
       const o = p.options.find((x) => x.id === el.dataset.opt);
-      const cur = o.votes.find((v) => v.userId === S.me.id)?.answer || null;
+      const cur = o.mine || null;
       const next = cur === el.dataset.ans ? null : el.dataset.ans;
       // optimistic update
-      o.votes = o.votes.filter((v) => v.userId !== S.me.id);
-      if (next) o.votes.push({ userId: S.me.id, name: S.me.name, answer: next, at: new Date().toISOString() });
-      if (!p.responders.some((r) => r.userId === S.me.id) && next) p.responders.push({ userId: S.me.id, name: S.me.name, at: new Date().toISOString() });
+      o.mine = next;
+      if (!p.anonymous) {
+        o.votes = o.votes.filter((v) => v.userId !== S.me.id);
+        if (next) o.votes.push({ userId: S.me.id, name: S.me.name, answer: next, at: new Date().toISOString() });
+      }
+      if (next) p.responded = true;
       refreshSheet();
       try {
         const r = await api('POST', gp(`/polls/${p.id}/vote`), { votes: { [o.id]: next } });
@@ -1614,6 +1935,20 @@
     },
     'group-features': () => openSheet('group-features'),
     'new-train': () => openSheet('meal-form'),
+    'new-topic': () => openSheet('topic-form'),
+    'open-topic': (el) => openTopic(el.dataset.id),
+    'edit-topic': (el) => openSheet('topic-form', { id: el.dataset.id }),
+    'delete-topic': async (el) => {
+      const t = S.topicDetail[el.dataset.id];
+      if (!(await ask({ title: `Delete \u201c${t.title}\u201d?`, message: 'The topic and all of its replies will be deleted for everyone.', ok: 'Delete', destructive: true }))) return;
+      try { await api('DELETE', gp(`/topics/${t.id}`)); S.topics = S.topics.filter((x) => x.id !== t.id); delete S.topicDetail[t.id]; closeSheet(); render(); toast('Topic deleted'); }
+      catch (ex) { toast(ex.message); }
+    },
+    'delete-tcomment': async (el) => {
+      if (!(await ask({ title: 'Delete this reply?', message: 'This can\u2019t be undone.', ok: 'Delete', destructive: true }))) return;
+      try { const r = await api('DELETE', gp(`/topics/${el.dataset.tid}/comments/${el.dataset.cid}`)); upsertTopic(r.topic); refreshSheet(); render(); toast('Reply deleted'); }
+      catch (ex) { toast(ex.message); }
+    },
     'open-train': (el) => { openSheet('meal', { id: el.dataset.id }); history.replaceState(null, '', '#meals/' + el.dataset.id); },
     'edit-train': (el) => openSheet('meal-form', { id: el.dataset.id }),
     'share-train': (el) => shareTrain(S.trains.find((x) => x.id === el.dataset.id)),
@@ -1681,7 +2016,7 @@
     },
     'edit-comment': (el) => {
       S.sheet.editComment = el.dataset.cid; refreshSheet();
-      const t = $sheetRoot.querySelector('.comment-edit textarea'); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); }
+      const t = $sheetRoot.querySelector('.comment-edit textarea, .tc-edit textarea'); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); }
     },
     'cancel-edit-comment': () => { S.sheet.editComment = null; refreshSheet(); },
     'delete-comment': async (el) => {
@@ -1720,6 +2055,22 @@
   });
   document.addEventListener('submit', async (ev) => {
     const f = ev.target;
+    if (f.classList?.contains('tc-form') || f.classList?.contains('tc-edit')) {
+      ev.preventDefault();
+      const text = f.querySelector('textarea').value.trim();
+      if (!text) { f.querySelector('textarea').focus(); return; }
+      const btn = f.querySelector('button[type=submit]'); btn.disabled = true;
+      try {
+        const editing = f.classList.contains('tc-edit');
+        const r = editing ? await api('PUT', gp(`/topics/${f.dataset.tid}/comments/${f.dataset.cid}`), { text })
+          : await api('POST', gp(`/topics/${f.dataset.tid}/comments`), { text });
+        if (editing) S.sheet.editComment = null; else f.querySelector('textarea').value = '';
+        upsertTopic(r.topic); refreshSheet(); render();
+        if (!editing) $sheetRoot.querySelector('.comments .comment:last-child')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        toast(editing ? 'Reply updated' : 'Replied');
+      } catch (ex) { toast(ex.message); btn.disabled = false; }
+      return;
+    }
     if (f.classList?.contains('comment-form') || f.classList?.contains('comment-edit')) {
       ev.preventDefault();
       const text = f.querySelector('textarea').value.trim();
@@ -1762,6 +2113,7 @@
     if (S.pendingPoll) { const id = S.pendingPoll; S.pendingPoll = null; if (S.view !== before) render(); if (S.polls.some((p) => p.id === id)) openSheet('poll', { id }); }
     else if (S.pendingPrayer) { const id = S.pendingPrayer; S.pendingPrayer = null; render(); if ((S.prayers || []).some((p) => p.id === id)) openSheet('prayer', { id }); }
     else if (S.pendingTrain) { const id = S.pendingTrain; S.pendingTrain = null; render(); if ((S.trains || []).some((t) => t.id === id)) openSheet('meal', { id }); }
+    else if (S.pendingTopic) { const id = S.pendingTopic; S.pendingTopic = null; render(); if ((S.topics || []).some((t) => t.id === id)) openTopic(id); }
     else render();
   });
 
@@ -1770,12 +2122,12 @@
     if (!S.me || document.hidden) return;
     if (TOUR) return;
     if (!S.groups.length) return; // join/create screen: never redraw it, or it wipes what someone is typing
-    if (S.sheet && ['event-form', 'poll-form', 'profile', 'group-new', 'group-join', 'group-edit', 'prayer-form', 'meal-form', 'meal-signup'].includes(S.sheet.kind)) return;
+    if (S.sheet && ['event-form', 'poll-form', 'profile', 'group-new', 'group-join', 'group-edit', 'prayer-form', 'meal-form', 'meal-signup', 'topic-form'].includes(S.sheet.kind)) return;
     if (S.sheet?.editComment) return;
-    const typing = document.querySelector('.comment-form textarea');
+    const typing = document.querySelector('.comment-form textarea, .tc-form textarea');
     if (typing && typing.value.trim()) return;
     if (document.getElementById('group-menu')) return;
-    if (document.activeElement?.closest?.('.bring-form, .comment-form, .comment-edit')) return;
+    if (document.activeElement?.closest?.('.bring-form, .comment-form, .comment-edit, .tc-form, .tc-edit')) return;
     try { await refreshGroups(); if (S.groups.length) await loadAll(); render(); if (S.sheet) refreshSheet(); } catch {}
   }
   setInterval(refresh, 30000);
@@ -1801,6 +2153,7 @@
     if (S.pendingPoll) { const id = S.pendingPoll; S.pendingPoll = null; if (S.polls.some((p) => p.id === id)) openSheet('poll', { id }); }
     if (S.pendingPrayer) { const id = S.pendingPrayer; S.pendingPrayer = null; if ((S.prayers || []).some((p) => p.id === id)) openSheet('prayer', { id }); }
     if (S.pendingTrain) { const id = S.pendingTrain; S.pendingTrain = null; if ((S.trains || []).some((t) => t.id === id)) openSheet('meal', { id }); }
+    if (S.pendingTopic) { const id = S.pendingTopic; S.pendingTopic = null; if ((S.topics || []).some((t) => t.id === id)) openTopic(id); }
   }
   (async () => {
     S.linkGroup = new URLSearchParams(location.search).get('g');
