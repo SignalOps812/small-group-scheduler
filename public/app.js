@@ -1387,6 +1387,7 @@
   // Keep things fresh while the tab is open
   async function refresh() {
     if (!S.me || document.hidden) return;
+    if (!S.groups.length) return; // join/create screen: never redraw it, or it wipes what someone is typing
     if (S.sheet && ['event-form', 'poll-form', 'profile', 'group-new', 'group-join', 'group-edit', 'prayer-form'].includes(S.sheet.kind)) return;
     if (S.sheet?.editComment) return;
     const typing = document.querySelector('.comment-form textarea');
