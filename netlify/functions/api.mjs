@@ -86,7 +86,7 @@ function parsePhone(v) {
 // Each person's own email choices (all on by default); the group's settings still apply on top
 const USER_NOTIFY_KEYS = ['event', 'scheduled', 'poll', 'prayer', 'prayerComment'];
 const userPrefs = (u) => Object.fromEntries(USER_NOTIFY_KEYS.map((k) => [k, (u.notifyPrefs || {})[k] !== false]));
-const userOut = (u) => ({ id: u.id, name: u.name, email: u.email, phone: u.phone || '', notify: u.notify !== false, notifyPrefs: userPrefs(u) });
+const userOut = (u) => ({ id: u.id, name: u.name, email: u.email, phone: u.phone || '', notify: u.notify !== false, notifyPrefs: userPrefs(u), tourDone: !!u.tourDone });
 const normCode = (c) => str(c, 60).toLowerCase().replace(/\s+/g, '-');
 function checkCode(code) {
   if (!/^[a-z0-9][a-z0-9-]{2,22}[a-z0-9]$/.test(code)) {
@@ -469,6 +469,7 @@ route('GET', '/me', async ({ req }) => {
 route('PATCH', '/me', async ({ req, body }) => {
   const u = await requireUser(req);
   if (typeof body.notify === 'boolean') u.notify = body.notify;
+  if (typeof body.tourDone === 'boolean') u.tourDone = body.tourDone ? now() : null;
   if (body.notifyPrefs && typeof body.notifyPrefs === 'object') {
     const next = userPrefs(u);
     for (const k of USER_NOTIFY_KEYS) if (typeof body.notifyPrefs[k] === 'boolean') next[k] = body.notifyPrefs[k];

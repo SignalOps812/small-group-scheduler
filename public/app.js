@@ -251,6 +251,111 @@
       <nav class="tabbar" role="tablist" aria-label="Sections">
         ${tabs.map(([k, label, icon]) => `<button role="tab" aria-selected="${S.view === k}" data-action="nav" data-view="${k}">${icon}<span>${label}</span>${k === 'polls' && pend ? `<span class="badge">${pend}</span>` : ''}</button>`).join('')}
       </nav>`;
+    if (TOUR) requestAnimationFrame(tourPlace);
+    else if (S.loaded && !S.me.tourDone && !S.sheet && !S.tourChecked) { S.tourChecked = true; setTimeout(() => startTour(false), 450); }
+  }
+
+  // ---------- First-run tour ----------
+  let TOUR = null;
+  // Visible copy of a tab: bottom bar on phones, segmented control on wider screens
+  const tabEl = (view) => [...document.querySelectorAll(`.tabbar [data-view="${view}"], .topbar .segmented [data-view="${view}"]`)].find((e) => e.getBoundingClientRect().width > 0);
+  function tourSteps() {
+    const first = esc((S.me.name || '').split(' ')[0]), org = isOrganizer(), g = curGroup();
+    const steps = [
+      { title: `Welcome to ${esc(S.config.appName)}${first ? ', ' + first : ''}!`, text: `Here\u2019s a quick look at how ${esc(g.name)} plans things together. It takes about a minute.` },
+      { el: () => document.querySelector('.group-switch'), title: 'Your groups', text: `You\u2019re in <b>${esc(g.name)}</b>. Tap here to switch groups, join another with a code, or start your own. <b>Group Info</b> has the invite code to share.${org ? ' As an organizer, Group Info is also where you turn features and email notifications on or off for the group.' : ''}` },
+      { el: () => tabEl('calendar'), view: 'calendar', title: 'Calendar', text: 'Everything the group has scheduled. Tap a day to see what\u2019s on, then tap an event for details, to add it to your own calendar, or to sign up for a pitch-in.' },
+      { el: () => document.querySelector('.title-row [data-action="new-event"]'), view: 'calendar', title: 'Add an event', text: 'Add a title, date, time, place and cost. Turn on <b>Pitch-in</b> to let people sign up for what they\u2019re bringing. The group gets an email about it.' },
+      { el: () => tabEl('polls'), view: 'polls', title: 'Polls', text: 'Can\u2019t agree on a date? Start a poll with a few options and everyone marks <b>Yes</b>, <b>Maybe</b> or <b>No</b>. Polls waiting on you show a red badge and sit at the top.' },
+    ];
+    if (showTab('prayer')) steps.push({ el: () => tabEl('prayer'), view: 'prayer', title: 'Prayer Requests', text: 'Share a request with the group, and post updates as things change. Everyone can comment to offer encouragement.' });
+    if (showTab('members')) steps.push({ el: () => tabEl('members'), view: 'members', title: 'Members', text: `See who\u2019s in the group and tap anyone to call, text or email them.${feat('members') ? '' : ' (This tab is hidden from regular members right now.)'}` });
+    steps.push(
+      { el: () => document.querySelector('.avatar-btn'), title: 'Your profile', text: 'Add your mobile number, choose which emails you get, or sign out. You can replay this tour from here anytime.' },
+      { title: 'You\u2019re all set', text: pendingCount() ? `You have <b>${pendingCount()}</b> poll${pendingCount() === 1 ? '' : 's'} waiting on you. Head to Polls when you\u2019re ready.` : 'Have fun planning together!', done: true },
+    );
+    return steps;
+  }
+  function startTour(force) {
+    if (TOUR || !S.me || !S.groups.length || !S.loaded) return;
+    if (!force && (S.me.tourDone || S.sheet || document.getElementById('group-menu'))) return;
+    closeMenu();
+    TOUR = { steps: tourSteps(), i: 0, back: S.view };
+    const root = document.createElement('div');
+    root.id = 'tour';
+    root.innerHTML = '<div class="tour-shade"></div><div class="tour-spot" aria-hidden="true"></div><div class="tour-card" role="dialog" aria-modal="true" aria-labelledby="tour-title" aria-describedby="tour-text"></div>';
+    document.body.appendChild(root);
+    document.body.style.overflow = 'hidden';
+    root.addEventListener('click', (e) => {
+      const a = e.target.closest('[data-tour]');
+      if (a) tourGo(a.dataset.tour);
+    });
+    document.addEventListener('keydown', tourKeys, true);
+    window.addEventListener('resize', tourPlace);
+    tourShow();
+  }
+  function tourKeys(e) {
+    if (!TOUR) return;
+    if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); tourGo('skip'); }
+    else if (e.key === 'ArrowRight') tourGo('next');
+    else if (e.key === 'ArrowLeft') tourGo('back');
+  }
+  function tourGo(dir) {
+    if (!TOUR) return;
+    if (dir === 'skip' || (dir === 'next' && TOUR.i === TOUR.steps.length - 1)) return endTour();
+    TOUR.i = Math.max(0, Math.min(TOUR.steps.length - 1, TOUR.i + (dir === 'back' ? -1 : 1)));
+    tourShow();
+  }
+  function tourShow() {
+    const st = TOUR.steps[TOUR.i], n = TOUR.steps.length, last = TOUR.i === n - 1;
+    if (st.view && S.view !== st.view) { S.view = st.view; history.replaceState(null, '', '#' + st.view); render(); }
+    const card = document.querySelector('#tour .tour-card');
+    card.innerHTML = `
+      <div class="tour-dots" aria-hidden="true">${TOUR.steps.map((_, k) => `<span class="${k === TOUR.i ? 'on' : ''}"></span>`).join('')}</div>
+      <h3 id="tour-title">${st.title}</h3>
+      <p id="tour-text">${st.text}</p>
+      <div class="tour-actions">
+        ${last ? '<span></span>' : '<button type="button" class="link-btn tour-skip" data-tour="skip">Skip tour</button>'}
+        <span class="tour-nav">
+          ${TOUR.i ? '<button type="button" class="btn sm tinted" data-tour="back">Back</button>' : ''}
+          <button type="button" class="btn sm" data-tour="next">${last ? 'Get Started' : TOUR.i ? 'Next' : 'Show Me Around'}</button>
+        </span>
+      </div>
+      <div class="sr-only" aria-live="polite">Step ${TOUR.i + 1} of ${n}</div>`;
+    window.scrollTo({ top: 0 });
+    requestAnimationFrame(() => { tourPlace(); card.querySelector('[data-tour="next"]').focus({ preventScroll: true }); });
+  }
+  function tourPlace() {
+    if (!TOUR) return;
+    const root = document.getElementById('tour'); if (!root) return;
+    const st = TOUR.steps[TOUR.i], spot = root.querySelector('.tour-spot'), card = root.querySelector('.tour-card'), shade = root.querySelector('.tour-shade');
+    const el = st.el && st.el();
+    const r = el && el.getBoundingClientRect();
+    const vw = innerWidth, vh = innerHeight, gap = 14, pad = 6;
+    if (!r || !r.width) { // centered welcome / finish card
+      spot.style.display = 'none'; shade.style.display = 'block';
+      card.classList.add('centered'); card.style.left = card.style.top = ''; return;
+    }
+    shade.style.display = 'none'; spot.style.display = 'block'; card.classList.remove('centered');
+    Object.assign(spot.style, { left: r.left - pad + 'px', top: r.top - pad + 'px', width: r.width + pad * 2 + 'px', height: r.height + pad * 2 + 'px' });
+    const cw = card.offsetWidth, ch = card.offsetHeight;
+    const below = r.bottom + pad + gap + ch <= vh - 8;
+    const top = below ? r.bottom + pad + gap : Math.max(8, r.top - pad - gap - ch);
+    const left = Math.min(Math.max(8, r.left + r.width / 2 - cw / 2), vw - cw - 8);
+    card.style.left = left + 'px'; card.style.top = top + 'px';
+    card.style.setProperty('--arrow-x', Math.min(Math.max(18, r.left + r.width / 2 - left), cw - 18) + 'px');
+    card.dataset.side = below ? 'below' : 'above';
+  }
+  function endTour() {
+    if (!TOUR) return;
+    const back = TOUR.back;
+    TOUR = null;
+    document.removeEventListener('keydown', tourKeys, true);
+    window.removeEventListener('resize', tourPlace);
+    document.getElementById('tour')?.remove();
+    document.body.style.overflow = '';
+    if (back && showTab(back) && S.view !== back) { S.view = back; history.replaceState(null, '', '#' + back); render(); }
+    if (!S.me.tourDone) { S.me.tourDone = true; api('PATCH', '/me', { tourDone: true }).then((r) => { S.me = r.user; }).catch(() => {}); }
   }
 
   // ---------- Calendar ----------
@@ -939,6 +1044,7 @@
               .map(([k, label, sub]) => `<div class="row"><span>${esc(label)}${sub ? `<small class="row-sub">${sub}</small>` : ''}</span><label class="switch"><input type="checkbox" data-action="toggle-pref" data-key="${k}" ${(m.notifyPrefs || {})[k] !== false ? 'checked' : ''} ${m.notify ? '' : 'disabled'}><span></span></label></div>`).join('')}
           </div>
           <p class="group-foot">Choose which emails you get. Group organizers can also turn some emails off for everyone in a group.</p>
+          <div class="group" style="margin-top:22px"><div class="row button-row" data-action="replay-tour" role="button" tabindex="0">Take the Tour<span class="chev">${I.right.replace('<svg', '<svg width="14" height="14"')}</span></div></div>
           <div class="group" style="margin-top:22px"><div class="row danger-row" data-action="logout" role="button" tabindex="0">Sign Out</div></div>
           <div id="sheet-msg"></div>
         </div></form>`;
@@ -1310,6 +1416,7 @@
       try { const r = await api('DELETE', gp(`/prayers/${el.dataset.pid}/comments/${el.dataset.cid}`)); upsertPrayer(r.prayer); refreshSheet(); render(); toast('Comment deleted'); }
       catch (ex) { toast(ex.message); }
     },
+    'replay-tour': () => { closeSheet(true); startTour(true); },
     'member-actions': (el) => openSheet('member', { id: el.dataset.id }),
     'copy-contact': async (el) => {
       const m = S.members.find((x) => x.id === el.dataset.id);
@@ -1387,6 +1494,7 @@
   // Keep things fresh while the tab is open
   async function refresh() {
     if (!S.me || document.hidden) return;
+    if (TOUR) return;
     if (!S.groups.length) return; // join/create screen: never redraw it, or it wipes what someone is typing
     if (S.sheet && ['event-form', 'poll-form', 'profile', 'group-new', 'group-join', 'group-edit', 'prayer-form'].includes(S.sheet.kind)) return;
     if (S.sheet?.editComment) return;
