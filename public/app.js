@@ -815,6 +815,7 @@
           ${org ? `<div class="group-label" style="margin-top:22px">Organizer</div>
           <div class="group kv">
             <div class="row button-row" data-action="edit-group" role="button" tabindex="0">Edit Name &amp; Code<span class="chev">${I.right.replace('<svg', '<svg width="14" height="14"')}</span></div>
+            <div class="row button-row" data-action="group-notifications" role="button" tabindex="0">Notifications<span class="v muted" style="margin-left:auto;margin-right:6px">${(() => { const n = Object.values(g.notifications || {}).filter(Boolean).length, t = Object.keys(g.notifications || {}).length; return n === 0 ? 'Off' : n === t ? 'All on' : `${n} of ${t} on`; })()}</span><span class="chev">${I.right.replace('<svg', '<svg width="14" height="14"')}</span></div>
             <div class="row button-row" data-action="group-features" role="button" tabindex="0">Features<span class="v muted" style="margin-left:auto;margin-right:6px">${[g.features?.members !== false && 'Members', g.features?.prayer && 'Prayer'].filter(Boolean).join(', ') || 'None'}</span><span class="chev">${I.right.replace('<svg', '<svg width="14" height="14"')}</span></div>
             <div class="row"><span>Email delivery</span><span class="v" id="email-status">Checking…</span></div>
           </div>` : ''}
@@ -833,6 +834,28 @@
           <p class="group-foot">Changes apply to everyone in ${esc(g.name)} right away. When the Members tab is off, organizers still see it and member contact info is hidden from everyone else. Turning off Prayer Requests hides them but keeps them, so they come back if you turn it on again.</p>
         </div>`;
     }
+    if (s.kind === 'group-notifications') {
+      const g = curGroup(), n = g.notifications || {};
+      const sw = (k, title, sub) => `<div class="row"><span>${title}<small class="row-sub">${sub}</small></span><label class="switch"><input type="checkbox" data-action="toggle-notification" data-key="${k}" ${n[k] ? 'checked' : ''}><span></span></label></div>`;
+      const prayerOff = !(g.features || {}).prayer;
+      return `${head('Notifications', 'Done')}
+        <div class="sheet-body">
+          <div class="group-label">Calendar</div>
+          <div class="group">
+            ${sw('event', 'New events', 'When someone adds an event to the calendar')}
+            ${sw('scheduled', 'Poll results', 'When an organizer schedules the final date from a poll')}
+          </div>
+          <div class="group-label" style="margin-top:22px">Polls</div>
+          <div class="group">${sw('poll', 'New polls', 'Asks everyone to vote on dates')}</div>
+          <div class="group-label" style="margin-top:22px">Prayer Requests</div>
+          <div class="group">
+            ${sw('prayer', 'New requests', 'When someone shares a prayer request')}
+            ${sw('prayerComment', 'Comments &amp; updates', 'Every new comment or update on a request')}
+          </div>
+          ${prayerOff ? '<p class="group-foot">Prayer Requests is turned off for this group, so these won\u2019t send until you turn it on in Features.</p>' : ''}
+          <p class="group-foot">These control which emails go to everyone in ${esc(g.name)}. Each person can also choose which of these they get from their own profile. Password reset emails always send.</p>
+        </div>`;
+    }
     if (s.kind === 'prayer-form') {
       const p = s.id ? (S.prayers || []).find((x) => x.id === s.id) : { title: '', description: '' };
       if (!p) return '';
@@ -842,7 +865,7 @@
             <div class="row"><input name="title" placeholder="Title" maxlength="120" value="${esc(p.title)}" aria-label="Title" required></div>
             <div class="row stack"><textarea name="description" placeholder="What would you like prayer for?" maxlength="4000" aria-label="Description">${esc(p.description)}</textarea></div>
           </div>
-          <p class="group-foot">Everyone in ${esc(curGroup().name)} can see this and add comments.${s.id ? '' : ' The group will get an email about it; comments and updates don\u2019t send emails.'}</p>
+          <p class="group-foot">Everyone in ${esc(curGroup().name)} can see this and add comments.${s.id ? '' : (() => { const n = curGroup().notifications || {}; return n.prayer ? ` The group will get an email about it${n.prayerComment ? ', and about new comments and updates' : '; comments and updates don\u2019t send emails'}.` : ''; })()}</p>
           <div id="sheet-msg"></div>
         </div></form>`;
     }
@@ -908,8 +931,14 @@
           <p class="group-foot">Your email and mobile number are visible to members of your groups. Leave mobile blank to keep it private.</p>
           <div class="group-label" style="margin-top:22px">Notifications</div>
           <div class="group">
-            <div class="row"><span>Email me about new events, polls and prayer requests</span><label class="switch"><input type="checkbox" name="notify" data-action="toggle-notify" ${m.notify ? 'checked' : ''}><span></span></label></div>
+            <div class="row"><span>Group emails<small class="row-sub">Turn off to stop all emails from your groups</small></span><label class="switch"><input type="checkbox" name="notify" data-action="toggle-notify" ${m.notify ? 'checked' : ''}><span></span></label></div>
           </div>
+          <div class="group notify-types${m.notify ? '' : ' is-off'}" style="margin-top:12px">
+            ${[['event', 'New events'], ['scheduled', 'Poll results', 'When a poll\u2019s final date is scheduled'], ['poll', 'New polls'],
+              ...(S.groups.some((g) => g.features?.prayer) ? [['prayer', 'New prayer requests'], ['prayerComment', 'Prayer comments & updates']] : [])]
+              .map(([k, label, sub]) => `<div class="row"><span>${esc(label)}${sub ? `<small class="row-sub">${sub}</small>` : ''}</span><label class="switch"><input type="checkbox" data-action="toggle-pref" data-key="${k}" ${(m.notifyPrefs || {})[k] !== false ? 'checked' : ''} ${m.notify ? '' : 'disabled'}><span></span></label></div>`).join('')}
+          </div>
+          <p class="group-foot">Choose which emails you get. Group organizers can also turn some emails off for everyone in a group.</p>
           <div class="group" style="margin-top:22px"><div class="row danger-row" data-action="logout" role="button" tabindex="0">Sign Out</div></div>
           <div id="sheet-msg"></div>
         </div></form>`;
@@ -1167,7 +1196,16 @@
       closeSheet(); go('calendar');
     },
     profile: () => { closeMenu(); openSheet('profile'); },
+    'toggle-pref': async (el) => {
+      const k = el.dataset.key, on = el.checked;
+      try {
+        const r = await api('PATCH', '/me', { notifyPrefs: { [k]: on } }); S.me = r.user;
+        toast(`${el.closest('.row').querySelector('span').firstChild.textContent.trim()} emails ${on ? 'on' : 'off'}`);
+      } catch (ex) { el.checked = !on; toast(ex.message); }
+    },
     'toggle-notify': async (el) => {
+      const box = $sheetRoot.querySelector('.notify-types');
+      if (box) { box.classList.toggle('is-off', !el.checked); box.querySelectorAll('input').forEach((i) => { i.disabled = !el.checked; }); }
       try { const r = await api('PATCH', '/me', { notify: el.checked }); S.me = r.user; toast(el.checked ? 'Email notifications on' : 'Email notifications off'); }
       catch (ex) { el.checked = !el.checked; toast(ex.message); }
     },
@@ -1231,6 +1269,17 @@
       }, 350);
     },
     'group-features': () => openSheet('group-features'),
+    'group-notifications': () => openSheet('group-notifications'),
+    'toggle-notification': async (el) => {
+      const g = curGroup(), k = el.dataset.key, on = el.checked;
+      el.disabled = true;
+      try {
+        const r = await api('PATCH', gp(''), { notifications: { [k]: on } });
+        g.notifications = r.group.notifications;
+        toast(`${el.closest('.row').querySelector('span').firstChild.textContent.trim()} emails ${on ? 'on' : 'off'}`);
+      } catch (ex) { el.checked = !on; toast(ex.message); }
+      el.disabled = false;
+    },
     'toggle-feature': async (el) => {
       const g = curGroup(), k = el.dataset.feature, on = el.checked;
       el.disabled = true;
@@ -1285,7 +1334,7 @@
 
   document.addEventListener('click', (ev) => {
     const el = ev.target.closest('[data-action]');
-    if (!el || (el.tagName === 'INPUT' && el.type === 'checkbox' && ['toggle-notify', 'toggle-feature'].includes(el.dataset.action))) return;
+    if (!el || (el.tagName === 'INPUT' && el.type === 'checkbox' && ['toggle-notify', 'toggle-feature', 'toggle-notification', 'toggle-pref'].includes(el.dataset.action))) return;
     const fn = actions[el.dataset.action];
     if (fn) { if (el.tagName === 'BUTTON' && el.type !== 'submit') ev.preventDefault(); fn(el, ev); }
   });
@@ -1320,6 +1369,8 @@
     if (el.matches?.('select[data-tp]')) { const tp = el.closest('.tp'); tp.classList.toggle('tp-empty', !tp.querySelector('select').value); }
     if (el.dataset?.action === 'toggle-notify') actions['toggle-notify'](el);
     if (el.dataset?.action === 'toggle-feature') actions['toggle-feature'](el);
+    if (el.dataset?.action === 'toggle-notification') actions['toggle-notification'](el);
+    if (el.dataset?.action === 'toggle-pref') actions['toggle-pref'](el);
   });
   document.addEventListener('keydown', (ev) => {
     if (ev.key === 'Escape') { if (document.getElementById('group-menu')) closeMenu(); else if (S.sheet) closeSheet(); }

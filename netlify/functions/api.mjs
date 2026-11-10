@@ -83,7 +83,10 @@ function parsePhone(v) {
   }
   return e164;
 }
-const userOut = (u) => ({ id: u.id, name: u.name, email: u.email, phone: u.phone || '', notify: u.notify !== false });
+// Each person's own email choices (all on by default); the group's settings still apply on top
+const USER_NOTIFY_KEYS = ['event', 'scheduled', 'poll', 'prayer', 'prayerComment'];
+const userPrefs = (u) => Object.fromEntries(USER_NOTIFY_KEYS.map((k) => [k, (u.notifyPrefs || {})[k] !== false]));
+const userOut = (u) => ({ id: u.id, name: u.name, email: u.email, phone: u.phone || '', notify: u.notify !== false, notifyPrefs: userPrefs(u) });
 const normCode = (c) => str(c, 60).toLowerCase().replace(/\s+/g, '-');
 function checkCode(code) {
   if (!/^[a-z0-9][a-z0-9-]{2,22}[a-z0-9]$/.test(code)) {
@@ -153,10 +156,13 @@ const featuresOf = (g) => ({ ...FEATURE_DEFAULTS, ...(g.features || {}) });
 function requireFeature(m, f) {
   if (!featuresOf(m.group)[f]) throw new HttpError(403, 'That feature is turned off for this group.');
 }
+// Which group emails go out; organizers control each type
+const NOTIFY_DEFAULTS = { event: true, scheduled: true, poll: true, prayer: true, prayerComment: false };
+const notifyOf = (g) => ({ ...NOTIFY_DEFAULTS, ...(g.notifications || {}) });
 async function groupSummary(gid, uid) {
   const [g, m, memberKeys] = await Promise.all([get(`groups/${gid}`), get(`g/${gid}/members/${uid}`), keys(`g/${gid}/members/`)]);
   if (!g || !m) return null;
-  return { id: g.id, name: g.name, code: g.code, role: m.role, memberCount: memberKeys.length, features: featuresOf(g), createdAt: g.createdAt };
+  return { id: g.id, name: g.name, code: g.code, role: m.role, memberCount: memberKeys.length, features: featuresOf(g), notifications: notifyOf(g), createdAt: g.createdAt };
 }
 async function myGroups(u) {
   return (await Promise.all(u.groups.map((gid) => groupSummary(gid, u.id)))).filter(Boolean);
@@ -266,22 +272,23 @@ async function sendEmail({ to, subject, html, text, gid }) {
     await logEmail(gid, subject, recipients.length, 'failed', err.message);
   }
 }
-async function notifyGroup(ctx, group, subject, heading, body, ctaText, ctaUrl, text) {
-  const memberIds = (await keys(`g/${group.id}/members/`)).map((k) => k.split('/').pop());
+async function notifyGroup(type, ctx, group, subject, heading, body, ctaText, ctaUrl, text, excludeId) {
+  const memberIds = (await keys(`g/${group.id}/members/`)).map((k) => k.split('/').pop()).filter((id) => id !== excludeId);
   const users = await Promise.all(memberIds.map((id) => get(`users/${id}`)));
-  const to = users.filter((u) => u && u.notify !== false).map((u) => u.email);
+  const to = users.filter((u) => u && u.notify !== false && userPrefs(u)[type]).map((u) => u.email);
   const html = emailShell(group.name, heading, body, ctaText, ctaUrl,
-    `You're receiving this as a member of ${group.name}. You can turn these emails off from your profile.`);
+    `You're receiving this as a member of ${group.name}. You can choose which emails you get from your profile.`);
   ctx.background(sendEmail({ to, subject: `[${group.name}] ${subject}`, html, text, gid: group.id }));
 }
 const deepLink = (gid, hash) => `${APP_URL()}/?g=${encodeURIComponent(gid)}#${hash}`;
 
 function notifyNewEvent(ctx, group, ev, byName, viaPoll) {
+  if (!notifyOf(group)[viaPoll ? 'scheduled' : 'event']) return;
   const when = `${fmtDate(ev.date)}${ev.time ? ' at ' + fmtTime(ev.time) : ''}`;
   const link = deepLink(group.id, `calendar/${ev.date}`);
   const intro = `<p style="margin:0 0 8px">${esc(byName)} ${viaPoll ? 'picked the final date from the poll' : 'added an event to the calendar'}.</p>` +
     (ev.pitchIn ? `<p style="margin:0 0 8px"><b>It\u2019s a pitch-in.</b> Open the event to see who\u2019s bringing what and add your dish.</p>` : '');
-  return notifyGroup(ctx, group,
+  return notifyGroup(viaPoll ? 'scheduled' : 'event', ctx, group,
     `${viaPoll ? 'Scheduled' : 'New event'}: ${ev.title} — ${when}`,
     `${viaPoll ? 'It’s on the calendar' : 'New event'}: ${esc(ev.title)}`,
     intro + detailRows([['When', when], ['Where', ev.location], ['Cost', fmtCost(ev.cost)], ['Details', ev.description]]),
@@ -289,9 +296,10 @@ function notifyNewEvent(ctx, group, ev, byName, viaPoll) {
     `${byName} ${viaPoll ? 'scheduled' : 'added'} "${ev.title}" for ${when}.${ev.location ? '\nWhere: ' + ev.location : ''}${ev.description ? '\n\n' + ev.description : ''}\n\n${link}`);
 }
 function notifyNewPoll(ctx, group, poll, byName) {
+  if (!notifyOf(group).poll) return;
   const link = deepLink(group.id, `polls/${poll.id}`);
   const list = poll.options.map((o) => `<li style="margin:2px 0">${esc(fmtDate(o.date))}${o.time ? ' · ' + esc(fmtTime(o.time)) : ''}</li>`).join('');
-  return notifyGroup(ctx, group,
+  return notifyGroup('poll', ctx, group,
     `New poll: ${poll.title} — please vote`,
     `Help pick a date: ${esc(poll.title)}`,
     `<p style="margin:0 0 8px">${esc(byName)} wants to find a time that works for everyone. Mark the dates you can make${poll.pitchIn ? ', and say what you\u2019ll bring to the pitch-in' : ''}.</p>` +
@@ -302,14 +310,27 @@ function notifyNewPoll(ctx, group, poll, byName) {
 }
 
 function notifyNewPrayer(ctx, group, pr, byName) {
+  if (!notifyOf(group).prayer) return;
   const link = deepLink(group.id, `prayer/${pr.id}`);
-  return notifyGroup(ctx, group,
+  return notifyGroup('prayer', ctx, group,
     `Prayer request: ${pr.title}`,
     `Prayer request: ${esc(pr.title)}`,
     `<p style="margin:0 0 8px">${esc(byName)} shared a prayer request with the group.</p>` +
       (pr.description ? `<p style="margin:0 0 8px;white-space:pre-line">${esc(pr.description)}</p>` : ''),
     'Open request', link,
     `${byName} shared a prayer request: "${pr.title}"${pr.description ? '\n\n' + pr.description : ''}\n\n${link}`);
+}
+
+function notifyPrayerComment(ctx, group, pr, comment, by) {
+  if (!notifyOf(group).prayerComment) return;
+  const link = deepLink(group.id, `prayer/${pr.id}`);
+  const isUpdate = by.id === pr.createdBy;
+  return notifyGroup('prayerComment', ctx, group,
+    `${isUpdate ? 'Update' : 'New comment'}: ${pr.title}`,
+    `${isUpdate ? 'Prayer update' : 'New comment'}: ${esc(pr.title)}`,
+    `<p style="margin:0 0 8px">${esc(by.name)} ${isUpdate ? 'posted an update' : 'commented'}:</p><p style="margin:0 0 8px;white-space:pre-line">${esc(comment.text)}</p>`,
+    'Open request', link,
+    `${by.name} ${isUpdate ? 'posted an update on' : 'commented on'} "${pr.title}":\n\n${comment.text}\n\n${link}`, by.id);
 }
 
 // ---------- Data shaping ----------
@@ -448,6 +469,11 @@ route('GET', '/me', async ({ req }) => {
 route('PATCH', '/me', async ({ req, body }) => {
   const u = await requireUser(req);
   if (typeof body.notify === 'boolean') u.notify = body.notify;
+  if (body.notifyPrefs && typeof body.notifyPrefs === 'object') {
+    const next = userPrefs(u);
+    for (const k of USER_NOTIFY_KEYS) if (typeof body.notifyPrefs[k] === 'boolean') next[k] = body.notifyPrefs[k];
+    u.notifyPrefs = next;
+  }
   if (body.phone !== undefined) u.phone = parsePhone(body.phone);
   if (body.name !== undefined) {
     const name = str(body.name, 80);
@@ -497,6 +523,11 @@ route('PATCH', '/groups/:gid', async ({ req, body, params }) => {
     const next = featuresOf(g);
     for (const k of Object.keys(FEATURE_DEFAULTS)) if (typeof body.features[k] === 'boolean') next[k] = body.features[k];
     g.features = next;
+  }
+  if (body.notifications && typeof body.notifications === 'object') {
+    const next = notifyOf(g);
+    for (const k of Object.keys(NOTIFY_DEFAULTS)) if (typeof body.notifications[k] === 'boolean') next[k] = body.notifications[k];
+    g.notifications = next;
   }
   if (body.name !== undefined) {
     const name = str(body.name, 60);
@@ -632,7 +663,7 @@ route('DELETE', '/groups/:gid/prayers/:id', async ({ req, params }) => {
   return { ok: true };
 });
 
-route('POST', '/groups/:gid/prayers/:id/comments', async ({ req, body, params }) => {
+route('POST', '/groups/:gid/prayers/:id/comments', async ({ req, body, params, ctx }) => {
   const m = await requireMember(req, params.gid); requireFeature(m, 'prayer');
   const p = await getPrayer(m, params.id);
   const text = str(body.text, 2000);
@@ -641,6 +672,7 @@ route('POST', '/groups/:gid/prayers/:id/comments', async ({ req, body, params })
   await put(`g/${m.group.id}/prayerc/${p.id}/${c.id}`, c);
   const next = { ...p, lastActivity: c.at };
   await put(`g/${m.group.id}/prayer/${p.id}`, next);
+  await notifyPrayerComment(ctx, m.group, p, c, m.user);
   return { prayer: await prayerOut(m.group.id, next, await nameMap(m.group.id)) };
 });
 

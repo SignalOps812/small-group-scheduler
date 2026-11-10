@@ -593,3 +593,5 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .notice { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; margin-bottom: 16px; font-size: 14px; line-height: 1.4; color: var(--label-2); }
 .notice svg { width: 20px; height: 20px; flex: none; color: var(--orange); margin-top: 1px; }
 .notice b { color: var(--label); }
+.notify-types.is-off { opacity: .45; }
+.notify-types { transition: opacity .2s ease; }
