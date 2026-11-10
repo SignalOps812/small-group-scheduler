@@ -1139,7 +1139,7 @@
       if (!t) return '';
       const today = todayStr(), up = trainUpcoming(t), cov = trainCovered(t, up), open = t.status === 'open';
       const slotOn = (d) => t.slots.find((x) => x.date === d);
-      const kv = [['Dates', trainRange(t)], ['Drop-off', trainDrop(t, up[0] || t.start)], ['Serving', t.headcount], ['Food notes', t.dietary], ['Instructions', t.instructions], ['Address', t.address], ['Family\u2019s phone', t.contactPhone]].filter(([, v]) => v);
+      const kv = [['Dates', trainRange(t)], ['Drop-off', trainDrop(t, up[0] || t.start)], ['Serving', t.headcount], ['Allergies & food notes', t.dietary], ['Instructions', t.instructions], ['Address', t.address], ['Family\u2019s phone', t.contactPhone]].filter(([, v]) => v);
       const showPast = !!s.showPast, dates = showPast ? t.dates : up;
       return `${head('Meal Train', 'Done')}
         <div class="sheet-body">
@@ -1197,7 +1197,7 @@
             <div class="row"><input name="dish" placeholder="What you\u2019re bringing" maxlength="160" value="${esc(mine?.dish || '')}" aria-label="What you're bringing" required></div>
             <div class="row stack"><textarea name="note" placeholder="Note for the family or coordinator (optional)" maxlength="500" aria-label="Note">${esc(mine?.note || '')}</textarea></div>
           </div>
-          ${t.dietary ? `<p class="group-foot"><b>Food notes:</b> ${esc(t.dietary)}</p>` : ''}
+          ${t.dietary ? `<div class="card mt-allergy" role="note" style="margin-top:18px"><div class="mt-allergy-icon">${I.info}</div><div><b>Allergies &amp; food notes</b><p>${esc(t.dietary)}</p></div></div>` : ''}
           <p class="group-foot">${mine ? '' : `You\u2019ll get the address and details by email at ${esc(S.me.email)}, and a reminder the day before.`}</p>
           ${mine ? `<div class="group" style="margin-top:22px"><div class="row danger-row" data-action="cancel-my-slot" data-id="${esc(t.id)}" data-date="${esc(mine.date)}" role="button" tabindex="0">Cancel My Sign-up</div></div>` : ''}
           <div id="sheet-msg"></div>

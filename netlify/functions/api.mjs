@@ -871,7 +871,7 @@ function mealDetailsHtml(t, slot, withAddress) {
   return detailRows([
     ['When', `${fmtDate(slot.date)}${t.dropStart ? '\n' + dropWindow(t, slot.date) : ''}`],
     ['Where', withAddress ? t.address : ''], ['Contact', withAddress ? t.contactPhone : ''],
-    ['Bringing', slot.dish], ['Serving', t.headcount], ['Food notes', t.dietary], ['Drop-off', t.instructions],
+    ['Bringing', slot.dish], ['Serving', t.headcount], ['Allergies', t.dietary], ['Drop-off', t.instructions], ['About', t.note],
   ]);
 }
 function volunteerEmail(ctx, group, t, slot, kind) {
@@ -895,7 +895,7 @@ function volunteerEmail(ctx, group, t, slot, kind) {
   const html = emailShell(`${t.title}`, esc(subj), `<p style="margin:0 0 8px">${intro}</p>${gone ? '' : mealDetailsHtml(t, slot, true)}`,
     gone ? 'Open meal train' : 'View or change your sign-up', gone ? publicLink(t) : manageLink(slot),
     `You signed up through ${group.name}’s meal train on ${APP_NAME()}.`);
-  const text = `${subj}\n\n${gone ? '' : `When: ${when}${t.dropStart ? ', ' + dropWindow(t, slot.date) : ''}\n${t.address ? 'Where: ' + t.address + '\n' : ''}Bringing: ${slot.dish}\n\nChange or cancel: ${manageLink(slot)}`}`;
+  const text = `${subj}\n\n${gone ? '' : `When: ${when}${t.dropStart ? ', ' + dropWindow(t, slot.date) : ''}\n${t.address ? 'Where: ' + t.address + '\n' : ''}Bringing: ${slot.dish}\n${t.dietary ? 'Allergies & food notes: ' + t.dietary + '\n' : ''}\nChange or cancel: ${manageLink(slot)}`}`;
   ctx.background(sendEmail({ to: slot.email, subject: subj, html, text, gid: group.id }));
 }
 async function coordinatorEmail(ctx, group, t, slot, kind, fromDate) {
@@ -913,7 +913,7 @@ function notifyNewTrain(ctx, group, t, byName, byId) {
   if (!notifyOf(group).meal) return;
   const range = `${fmtDate(t.start).replace(/, \d{4}$/, '')} – ${fmtDate(t.end)}`;
   return notifyGroup('meal', ctx, group, `Meal train: ${t.recipient}`, `Meal train for ${esc(t.recipient)}`,
-    `<p style="margin:0 0 8px">${esc(byName)} started a meal train. Pick a day to bring a meal.</p>${detailRows([['Dates', range], ['Drop-off', t.dropStart ? dropWindow(t, t.start) : ''], ['Food notes', t.dietary], ['Details', t.note]])}`,
+    `<p style="margin:0 0 8px">${esc(byName)} started a meal train. Pick a day to bring a meal.</p>${detailRows([['Dates', range], ['Drop-off', t.dropStart ? dropWindow(t, t.start) : ''], ['Allergies', t.dietary], ['Details', t.note]])}`,
     'Sign up for a day', deepLink(group.id, `meals/${t.id}`),
     `${byName} started a meal train for ${t.recipient} (${range}). Sign up: ${deepLink(group.id, `meals/${t.id}`)}`, byId);
 }
