@@ -168,11 +168,13 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 
 .tabbar {
   position: fixed; left: 0; right: 0; bottom: 0; z-index: 20; display: none;
-  grid-template-columns: repeat(3, 1fr); padding: 6px 8px calc(6px + env(safe-area-inset-bottom));
+  grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); /* one row, equal widths for any number of tabs */
+  padding: 6px max(4px, env(safe-area-inset-left)) calc(6px + env(safe-area-inset-bottom)) max(4px, env(safe-area-inset-right));
   background: var(--bar); backdrop-filter: saturate(180%) blur(20px); -webkit-backdrop-filter: saturate(180%) blur(20px);
   border-top: .5px solid var(--sep);
 }
-.tabbar button { display: grid; justify-items: center; gap: 2px; font-size: 10px; font-weight: 500; color: var(--label-2); padding: 4px 0; position: relative; }
+.tabbar button { display: grid; justify-items: center; gap: 2px; font-size: 10px; font-weight: 500; color: var(--label-2); padding: 4px 0; position: relative; min-width: 0; }
+.tabbar button span:not(.badge) { max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tabbar button svg { width: 26px; height: 26px; }
 .tabbar button[aria-selected="true"] { color: var(--blue); }
 .badge {
