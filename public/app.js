@@ -104,6 +104,17 @@
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
     set(k, v) { try { localStorage.setItem(k, v); } catch {} },
   };
+  // Appearance: 'auto' follows the device; 'light' / 'dark' override it on this device
+  const THEME_BAR = { light: '#f2f2f7', dark: '#000000' };
+  function applyTheme(t) {
+    const root = document.documentElement;
+    if (t === 'light' || t === 'dark') root.dataset.theme = t; else delete root.dataset.theme;
+    document.querySelectorAll('meta[name="theme-color"]').forEach((m) => {
+      m.dataset.orig ||= m.content;
+      m.content = t === 'light' || t === 'dark' ? THEME_BAR[t] : m.dataset.orig;
+    });
+  }
+  applyTheme(store.get('sg_theme') || 'auto');
 
   const I = {
     plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
@@ -319,20 +330,24 @@
   const tabEl = (view) => [...document.querySelectorAll(`.tabbar [data-view="${view}"], .topbar .segmented [data-view="${view}"]`)].find((e) => e.getBoundingClientRect().width > 0);
   function tourSteps() {
     const first = esc((S.me.name || '').split(' ')[0]), org = isOrganizer(), g = curGroup();
+    const menuItem = (action) => () => document.querySelector(`#group-menu [data-action="${action}"]`);
     const steps = [
-      { title: `Welcome to ${esc(S.config.appName)}${first ? ', ' + first : ''}!`, text: `Here\u2019s a quick look at how ${esc(g.name)} plans things together. It takes about a minute.` },
-      { el: () => document.querySelector('.group-switch'), title: 'Your groups', text: `You\u2019re in <b>${esc(g.name)}</b>. Tap here to switch groups, join another with a code, or start your own. <b>Group Info</b> has the invite code to share.${org ? ' As an organizer, Group Info is also where you turn features and email notifications on or off for the group.' : ''}` },
-      { el: () => tabEl('calendar'), view: 'calendar', title: 'Calendar', text: 'Everything the group has scheduled. Tap a day to see what\u2019s on, then tap an event for details, to add it to your own calendar, or to sign up for a pitch-in.' },
-      { el: () => document.querySelector('.title-row [data-action="new-event"]'), view: 'calendar', title: 'Add an event', text: 'Add a title, date, time, place and cost. Turn on <b>Pitch-in</b> to let people sign up for what they\u2019re bringing. The group gets an email about it.' },
-      { el: () => tabEl('polls'), view: 'polls', title: 'Polls', text: 'Can\u2019t agree on a date? Start a poll with a few options and everyone marks <b>Yes</b>, <b>Maybe</b> or <b>No</b>. Polls waiting on you show a red badge and sit at the top.' },
+      { title: `Welcome to ${esc(S.config.appName)}${first ? ', ' + first : ''}!`, text: `Here’s a quick look at how ${esc(g.name)} plans things together. It takes about a minute.` },
+      { el: () => document.querySelector('.group-switch'), view: 'calendar', title: 'Your groups', text: `You’re in <b>${esc(g.name)}</b>. Tap here to switch groups, join another with a code, or start your own.` },
+      { el: menuItem('group-info'), menu: true, title: org ? 'Group settings' : 'Group Info', text: org
+          ? `Group settings live in this menu under <b>Group Info</b>: the invite code, the group name, <b>Features</b> (turn tabs like Prayer, Meals and Discussions on or off), <b>Notifications</b> (which emails the group sends), and who’s an organizer.`
+          : `Open the group menu and choose <b>Group Info</b> for the invite code to share, or to leave the group. Organizers manage the group’s settings from here.` },
+      { el: () => tabEl('calendar'), view: 'calendar', title: 'Calendar', text: 'Everything the group has scheduled. Tap a day to see what’s on, then tap an event for details, to add it to your own calendar, or to sign up for a pitch-in.' },
+      { el: () => document.querySelector('.title-row [data-action="new-event"]'), view: 'calendar', title: 'Add an event', text: 'Add a title, date, time and time zone, place and cost. Turn on <b>Pitch-in</b> to let people sign up for what they’re bringing. The group gets an email about it.' },
+      { el: () => tabEl('polls'), view: 'polls', title: 'Polls', text: 'Start a <b>Dates</b> poll to find a time, a <b>Pitch-in</b> to plan who brings what, or a <b>Multiple choice</b> poll to ask anything. Any poll can be anonymous. Polls waiting on you sit at the top with a red badge.' },
     ];
-    if (showTab('topics')) steps.push({ el: () => tabEl('topics'), view: 'topics', title: 'Discussions', text: 'Start a topic and talk it through together. Topics with new replies you haven\u2019t read show up at the top, with a badge on the tab.' });
-    if (showTab('meals')) steps.push({ el: () => tabEl('meals'), view: 'meals', title: 'Meal Trains', text: 'When a family needs support, start a meal train and share its link. Anyone can sign up for a day, even without an account, and gets the address and a reminder by email.' });
     if (showTab('prayer')) steps.push({ el: () => tabEl('prayer'), view: 'prayer', title: 'Prayer Requests', text: 'Share a request with the group, and post updates as things change. Everyone can comment to offer encouragement.' });
-    if (showTab('members')) steps.push({ el: () => tabEl('members'), view: 'members', title: 'Members', text: `See who\u2019s in the group and tap anyone to call, text or email them.${feat('members') ? '' : ' (This tab is hidden from regular members right now.)'}` });
+    if (showTab('meals')) steps.push({ el: () => tabEl('meals'), view: 'meals', title: 'Meal Trains', text: 'When a family needs support, start a meal train and share its link. Anyone can sign up for a day — even without an account — and gets the address, allergy notes and a reminder by email.' });
+    if (showTab('topics')) steps.push({ el: () => tabEl('topics'), view: 'topics', title: 'Discussions', text: 'A forum for the group. Start a topic and reply in the thread. Topics with something new sit under <b>Unread</b>, and you can read replies oldest or newest first.' });
+    if (showTab('members')) steps.push({ el: () => tabEl('members'), view: 'members', title: 'Members', text: `See who’s in the group and tap anyone to call, text or email them.${feat('members') ? '' : ' (This tab is hidden from regular members right now.)'}` });
     steps.push(
-      { el: () => document.querySelector('.avatar-btn'), title: 'Your profile', text: 'Add your mobile number, choose which emails you get, or sign out. You can replay this tour from here anytime.' },
-      { title: 'You\u2019re all set', text: pendingCount() ? `You have <b>${pendingCount()}</b> poll${pendingCount() === 1 ? '' : 's'} waiting on you. Head to Polls when you\u2019re ready.` : 'Have fun planning together!', done: true },
+      { el: () => document.querySelector('.avatar-btn'), title: 'Your profile', text: 'Add your mobile number, choose exactly which emails you get, switch between light and dark mode, or sign out. You can replay this tour from here anytime.' },
+      { title: 'You’re all set', text: pendingCount() ? `You have <b>${pendingCount()}</b> poll${pendingCount() === 1 ? '' : 's'} waiting on you. Head to Polls when you’re ready.` : 'Have fun planning together!', done: true },
     );
     return steps;
   }
@@ -368,7 +383,9 @@
   }
   function tourShow() {
     const st = TOUR.steps[TOUR.i], n = TOUR.steps.length, last = TOUR.i === n - 1;
-    if (st.view && S.view !== st.view) { S.view = st.view; history.replaceState(null, '', '#' + st.view); render(); }
+    if (st.view && (S.view !== st.view || (st.view === 'topics' && S.topicOpen))) { S.view = st.view; if (st.view === 'topics') S.topicOpen = null; history.replaceState(null, '', '#' + st.view); render(); }
+    if (st.menu) { if (!document.getElementById('group-menu')) openMenu(); document.removeEventListener('pointerdown', menuOutside, true); }
+    else closeMenu();
     const card = document.querySelector('#tour .tour-card');
     card.innerHTML = `
       <div class="tour-dots" aria-hidden="true">${TOUR.steps.map((_, k) => `<span class="${k === TOUR.i ? 'on' : ''}"></span>`).join('')}</div>
@@ -408,6 +425,7 @@
   }
   function endTour() {
     if (!TOUR) return;
+    closeMenu();
     const back = TOUR.back;
     TOUR = null;
     document.removeEventListener('keydown', tourKeys, true);
@@ -1450,6 +1468,13 @@
             <div class="row"><label for="pr-phone">Mobile</label><input id="pr-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="Optional" value="${esc(fmtPhone(m.phone))}"></div>
           </div>
           <p class="group-foot">Your email and mobile number are visible to members of your groups. Leave mobile blank to keep it private.</p>
+          <div class="group-label" style="margin-top:22px">Appearance</div>
+          <div class="group"><div class="row" style="justify-content:center;padding:10px 12px">
+            ${(() => { const cur = store.get('sg_theme') || 'auto', opts = [['auto', 'Automatic'], ['light', 'Light'], ['dark', 'Dark']], i = opts.findIndex(([k]) => k === cur);
+              return `<div class="segmented theme-seg" role="radiogroup" aria-label="Appearance"><span class="thumb" style="width:calc(33.333% - 1.33px);transform:translateX(${i * 100}%)"></span>
+                ${opts.map(([k, l]) => `<button type="button" role="radio" aria-checked="${k === cur}" aria-selected="${k === cur}" data-action="set-theme" data-theme="${k}">${l}</button>`).join('')}</div>`; })()}
+          </div></div>
+          <p class="group-foot">Automatic matches your device\u2019s light or dark setting. This choice is saved on this device.</p>
           <div class="group-label" style="margin-top:22px">Notifications</div>
           <div class="group">
             <div class="row"><span>Group emails<small class="row-sub">Turn off to stop all emails from your groups</small></span><label class="switch"><input type="checkbox" name="notify" data-action="toggle-notify" ${m.notify ? 'checked' : ''}><span></span></label></div>
@@ -2058,6 +2083,12 @@
       if (!(await ask({ title: 'Delete this comment?', message: 'This can’t be undone.', ok: 'Delete', destructive: true }))) return;
       try { const r = await api('DELETE', gp(`/prayers/${el.dataset.pid}/comments/${el.dataset.cid}`)); upsertPrayer(r.prayer); refreshSheet(); render(); toast('Comment deleted'); }
       catch (ex) { toast(ex.message); }
+    },
+    'set-theme': (el) => {
+      const t = el.dataset.theme; store.set('sg_theme', t); applyTheme(t);
+      const seg = el.closest('.theme-seg');
+      seg.querySelectorAll('button').forEach((b) => { const on = b === el; b.setAttribute('aria-checked', on); b.setAttribute('aria-selected', on); });
+      seg.querySelector('.thumb').style.transform = `translateX(${[...seg.querySelectorAll('button')].indexOf(el) * 100}%)`;
     },
     'replay-tour': () => { closeSheet(true); startTour(true); },
     'member-actions': (el) => openSheet('member', { id: el.dataset.id }),

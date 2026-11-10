@@ -18,8 +18,22 @@
   --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "SF Pro Display", "Inter", "Segoe UI", system-ui, Helvetica, Arial, sans-serif;
   color-scheme: light dark;
 }
+/* Appearance: follows the device unless the person picks Light or Dark (data-theme on <html>) */
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #000000; --bg-elev: #1c1c1e; --bg-elev-2: #2c2c2e;
+    --fill: rgba(120,120,128,.24); --fill-2: rgba(120,120,128,.16);
+    --label: #ffffff; --label-2: rgba(235,235,245,.6); --label-3: rgba(235,235,245,.3);
+    --sep: rgba(84,84,88,.6);
+    --blue: #0a84ff; --green: #30d158; --orange: #ff9f0a; --red: #ff453a;
+    --purple: #bf5af2; --pink: #ff375f; --teal: #40c8e0; --indigo: #5e5ce6; --yellow: #ffd60a; --brown: #ac8e68;
+    --bar: rgba(22,22,24,.78);
+    --shadow: 0 0 0 .5px rgba(255,255,255,.06);
+    --shadow-lg: 0 20px 60px rgba(0,0,0,.6);
+}
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg: #000000; --bg-elev: #1c1c1e; --bg-elev-2: #2c2c2e;
     --fill: rgba(120,120,128,.24); --fill-2: rgba(120,120,128,.16);
     --label: #ffffff; --label-2: rgba(235,235,245,.6); --label-3: rgba(235,235,245,.3);
@@ -108,7 +122,8 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
   position: absolute; z-index: 0; top: 2px; bottom: 2px; left: 2px; border-radius: 7px; background: var(--bg-elev);
   box-shadow: 0 3px 8px rgba(0,0,0,.12), 0 3px 1px rgba(0,0,0,.04); transition: transform .28s cubic-bezier(.3,.7,.2,1);
 }
-@media (prefers-color-scheme: dark) { .segmented .thumb { background: #636366; } }
+:root[data-theme="dark"] .segmented .thumb { background: #636366; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .segmented .thumb { background: #636366; } }
 .segmented button[aria-selected="true"] { font-weight: 600; }
 .auth-card .segmented { width: 100%; margin-bottom: 18px; }
 
@@ -291,7 +306,8 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 }
 .date-tile .m { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #fff; background: var(--red); padding: 2px 0; }
 .date-tile .d { font-size: 21px; font-weight: 600; padding: 2px 0 4px; font-variant-numeric: tabular-nums; }
-@media (prefers-color-scheme: dark) { .date-tile { background: var(--bg-elev-2); } }
+:root[data-theme="dark"] .date-tile { background: var(--bg-elev-2); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .date-tile { background: var(--bg-elev-2); } }
 
 /* ---------- Polls ---------- */
 .poll-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr)); gap: 14px; }
@@ -854,3 +870,6 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .thread .post-reply + .replies { margin-top: 12px; }
 .thread .replies + .post-reply { margin-top: 18px; }
 .thread .reply-order + .post-reply { margin-top: 0; }
+.segmented.theme-seg { display: grid; width: 100%; max-width: 360px; }
+.theme-seg button { font-size: 14px; }
+:root { transition: background-color .2s ease; }
