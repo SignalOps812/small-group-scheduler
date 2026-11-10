@@ -10,6 +10,8 @@
 //   names/<sha256(normalized name)> { groupId }   — keeps group names unique
 //   g/<gid>/members/<uid>          { userId, role: 'organizer'|'member', joinedAt }
 //   g/<gid>/events/<id>, g/<gid>/polls/<id>, g/<gid>/votes/<pollId>/<uid>, g/<gid>/emaillog/<ts>
+//   g/<gid>/prayer/<id>             { id, title, description, createdBy, createdAt, updatedAt, lastActivity }
+//   g/<gid>/prayerc/<prayerId>/<cid> { id, userId, text, at, editedAt }
 //   g/<gid>/bring/<p|e>-<id>/<uid>  { target, userId, items: [{ item, category }], at }   — pitch-in sign-ups
 import crypto from 'node:crypto';
 import { getStore } from '@netlify/blobs';
@@ -145,10 +147,16 @@ async function requireMember(req, gid) {
 }
 const canModify = (m, ownerId) => m.organizer || m.user.id === ownerId;
 
+// Optional features organizers can switch on/off per group
+const FEATURE_DEFAULTS = { members: true, prayer: false };
+const featuresOf = (g) => ({ ...FEATURE_DEFAULTS, ...(g.features || {}) });
+function requireFeature(m, f) {
+  if (!featuresOf(m.group)[f]) throw new HttpError(403, 'That feature is turned off for this group.');
+}
 async function groupSummary(gid, uid) {
   const [g, m, memberKeys] = await Promise.all([get(`groups/${gid}`), get(`g/${gid}/members/${uid}`), keys(`g/${gid}/members/`)]);
   if (!g || !m) return null;
-  return { id: g.id, name: g.name, code: g.code, role: m.role, memberCount: memberKeys.length, createdAt: g.createdAt };
+  return { id: g.id, name: g.name, code: g.code, role: m.role, memberCount: memberKeys.length, features: featuresOf(g), createdAt: g.createdAt };
 }
 async function myGroups(u) {
   return (await Promise.all(u.groups.map((gid) => groupSummary(gid, u.id)))).filter(Boolean);
@@ -474,6 +482,11 @@ route('PATCH', '/groups/:gid', async ({ req, body, params }) => {
   const m = await requireMember(req, params.gid);
   if (!m.organizer) throw new HttpError(403, 'Only organizers can change group settings.');
   const g = { ...m.group };
+  if (body.features && typeof body.features === 'object') {
+    const next = featuresOf(g);
+    for (const k of Object.keys(FEATURE_DEFAULTS)) if (typeof body.features[k] === 'boolean') next[k] = body.features[k];
+    g.features = next;
+  }
   if (body.name !== undefined) {
     const name = str(body.name, 60);
     if (!name) throw new HttpError(400, 'Please give your group a name.');
@@ -516,7 +529,10 @@ route('GET', '/groups/:gid/members', async ({ req, params }) => {
   const m = await requireMember(req, params.gid);
   const members = await listAll(`g/${m.group.id}/members/`);
   const users = await Promise.all(members.map((x) => get(`users/${x.userId}`)));
-  return { members: members.map((x, i) => users[i] && ({ id: x.userId, name: users[i].name, email: users[i].email, phone: users[i].phone || '', role: x.role, joined: x.joinedAt }))
+  // When the Members tab is off, only organizers see contact details
+  const showContact = featuresOf(m.group).members || m.organizer;
+  return { members: members.map((x, i) => users[i] && ({ id: x.userId, name: users[i].name, role: x.role, joined: x.joinedAt,
+      ...(showContact ? { email: users[i].email, phone: users[i].phone || '' } : {}) }))
     .filter(Boolean).sort((a, b) => a.name.localeCompare(b.name)) };
 });
 
@@ -552,6 +568,92 @@ route('GET', '/groups/:gid/email-log', async ({ req, params }) => {
   if (!m.organizer) throw new HttpError(403, 'Organizers only.');
   const log = (await listAll(`g/${m.group.id}/emaillog/`)).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 50);
   return { configured: !!RESEND_API_KEY(), log };
+});
+
+// --- Prayer requests ---
+async function prayerOut(gid, p, names) {
+  const comments = (await listAll(`g/${gid}/prayerc/${p.id}/`)).sort((a, b) => a.at.localeCompare(b.at))
+    .map((c) => ({ ...c, name: names[c.userId] || 'Former member' }));
+  return { ...p, createdByName: names[p.createdBy] || 'Former member', comments };
+}
+async function getPrayer(m, id) {
+  const p = await get(`g/${m.group.id}/prayer/${validId(id)}`);
+  if (!p) throw new HttpError(404, 'Prayer request not found.');
+  return p;
+}
+function readPrayerBody(body) {
+  const title = str(body.title, 120), description = str(body.description, 4000);
+  if (!title) throw new HttpError(400, 'Please add a title.');
+  return { title, description };
+}
+
+route('GET', '/groups/:gid/prayers', async ({ req, params }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'prayer');
+  const [list, names] = await Promise.all([listAll(`g/${m.group.id}/prayer/`), nameMap(m.group.id)]);
+  list.sort((a, b) => (b.lastActivity || b.createdAt).localeCompare(a.lastActivity || a.createdAt));
+  return { prayers: await Promise.all(list.map((p) => prayerOut(m.group.id, p, names))) };
+});
+
+route('POST', '/groups/:gid/prayers', async ({ req, body, params }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'prayer');
+  const t = now();
+  const p = { id: newId(), ...readPrayerBody(body), createdBy: m.user.id, createdAt: t, lastActivity: t };
+  await put(`g/${m.group.id}/prayer/${p.id}`, p);
+  return { prayer: await prayerOut(m.group.id, p, await nameMap(m.group.id)) };
+});
+
+route('PUT', '/groups/:gid/prayers/:id', async ({ req, body, params }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'prayer');
+  const p = await getPrayer(m, params.id);
+  if (!canModify(m, p.createdBy)) throw new HttpError(403, 'You can only edit your own prayer requests.');
+  const next = { ...p, ...readPrayerBody(body), updatedAt: now() };
+  await put(`g/${m.group.id}/prayer/${p.id}`, next);
+  return { prayer: await prayerOut(m.group.id, next, await nameMap(m.group.id)) };
+});
+
+route('DELETE', '/groups/:gid/prayers/:id', async ({ req, params }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'prayer');
+  const p = await getPrayer(m, params.id);
+  if (!canModify(m, p.createdBy)) throw new HttpError(403, 'You can only remove your own prayer requests.');
+  await Promise.all((await keys(`g/${m.group.id}/prayerc/${p.id}/`)).map((k) => del(k)));
+  await del(`g/${m.group.id}/prayer/${p.id}`);
+  return { ok: true };
+});
+
+route('POST', '/groups/:gid/prayers/:id/comments', async ({ req, body, params }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'prayer');
+  const p = await getPrayer(m, params.id);
+  const text = str(body.text, 2000);
+  if (!text) throw new HttpError(400, 'Write a comment first.');
+  const c = { id: newId(), userId: m.user.id, text, at: now() };
+  await put(`g/${m.group.id}/prayerc/${p.id}/${c.id}`, c);
+  const next = { ...p, lastActivity: c.at };
+  await put(`g/${m.group.id}/prayer/${p.id}`, next);
+  return { prayer: await prayerOut(m.group.id, next, await nameMap(m.group.id)) };
+});
+
+route('PUT', '/groups/:gid/prayers/:id/comments/:cid', async ({ req, body, params }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'prayer');
+  const p = await getPrayer(m, params.id);
+  const key = `g/${m.group.id}/prayerc/${p.id}/${validId(params.cid)}`;
+  const c = await get(key);
+  if (!c) throw new HttpError(404, 'Comment not found.');
+  if (!canModify(m, c.userId)) throw new HttpError(403, 'You can only edit your own comments.');
+  const text = str(body.text, 2000);
+  if (!text) throw new HttpError(400, 'A comment can\u2019t be empty.');
+  await put(key, { ...c, text, editedAt: now() });
+  return { prayer: await prayerOut(m.group.id, p, await nameMap(m.group.id)) };
+});
+
+route('DELETE', '/groups/:gid/prayers/:id/comments/:cid', async ({ req, params }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'prayer');
+  const p = await getPrayer(m, params.id);
+  const key = `g/${m.group.id}/prayerc/${p.id}/${validId(params.cid)}`;
+  const c = await get(key);
+  if (!c) throw new HttpError(404, 'Comment not found.');
+  if (!canModify(m, c.userId)) throw new HttpError(403, 'You can only remove your own comments.');
+  await del(key);
+  return { prayer: await prayerOut(m.group.id, p, await nameMap(m.group.id)) };
 });
 
 // --- Events ---

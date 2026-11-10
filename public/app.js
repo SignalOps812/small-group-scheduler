@@ -49,6 +49,10 @@
   const curGroup = () => S.groups.find((g) => g.id === S.gid) || null;
   const isOrganizer = () => curGroup()?.role === 'organizer';
   const canModify = (ownerId) => S.me && (isOrganizer() || S.me.id === ownerId);
+  const feat = (f) => { const g = curGroup(); return !!(g && (g.features || { members: true, prayer: false })[f]); };
+  // Members tab stays visible to organizers even when hidden from everyone else
+  const showTab = (k) => k === 'prayer' ? feat('prayer') : k === 'members' ? feat('members') || isOrganizer() : true;
+  const tabList = () => [['calendar', 'Calendar', I.cal], ['polls', 'Polls', I.poll], ['prayer', 'Prayer', I.pray], ['members', 'Members', I.people]].filter(([k]) => showTab(k));
   const gp = (path = '') => `/groups/${encodeURIComponent(S.gid)}${path}`;
   const store = {
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -70,6 +74,7 @@
     mail: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M4 7l8 6 8-6"/></svg>',
     more: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="6" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="18" cy="12" r="1.8"/></svg>',
     info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="7.8" r=".6" fill="currentColor"/></svg>',
+    pray: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20.5s-7.5-4.4-7.5-10A4.3 4.3 0 0 1 12 7.6a4.3 4.3 0 0 1 7.5 2.9c0 5.6-7.5 10-7.5 10z"/></svg>',
     key: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3M14 9l2 2"/></svg>',
     minus: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="10" fill="var(--red)"/><path d="M7.5 12h9" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></svg>',
   };
@@ -116,9 +121,10 @@
   async function loadAll() {
     if (!S.gid) return;
     const gid = S.gid;
-    const [e, p, m] = await Promise.all([api('GET', gp('/events')), api('GET', gp('/polls')), api('GET', gp('/members'))]);
+    const [e, p, m, pr] = await Promise.all([api('GET', gp('/events')), api('GET', gp('/polls')), api('GET', gp('/members')),
+      feat('prayer') ? api('GET', gp('/prayers')) : Promise.resolve({ prayers: [] })]);
     if (gid !== S.gid) return; // switched groups mid-load
-    S.events = e.events; S.polls = p.polls; S.members = m.members; S.loaded = true;
+    S.events = e.events; S.polls = p.polls; S.members = m.members; S.prayers = pr.prayers; S.loaded = true;
   }
   const eventsOn = (d) => S.events.filter((e) => e.date === d);
   const pendingPolls = () => S.polls.filter((p) => p.status === 'open' && !p.responders.some((r) => r.userId === S.me.id));
@@ -131,7 +137,8 @@
   function readHash() {
     const [view, arg] = location.hash.replace(/^#\/?/, '').split('/');
     if (view === 'reset' && arg) { S.resetToken = arg; S.authMode = 'reset'; return; }
-    if (['calendar', 'polls', 'members'].includes(view)) S.view = view;
+    if (['calendar', 'polls', 'members', 'prayer'].includes(view)) S.view = view;
+    if (view === 'prayer' && arg) S.pendingPrayer = arg;
     if (view === 'calendar' && arg && /^\d{4}-\d{2}-\d{2}$/.test(arg)) { S.selected = arg; const d = parseYmd(arg); S.month = new Date(d.getFullYear(), d.getMonth(), 1); }
     if (view === 'polls' && arg) S.pendingPoll = arg;
   }
@@ -215,12 +222,14 @@
     if (!S.groups.length) return renderOnboarding();
     const g = curGroup();
     const pend = pendingCount();
-    const tabs = [['calendar', 'Calendar', I.cal], ['polls', 'Polls', I.poll], ['members', 'Members', I.people]];
+    if (!showTab(S.view)) { S.view = 'calendar'; history.replaceState(null, '', '#calendar'); }
+    const tabs = tabList();
     const idx = tabs.findIndex((t) => t[0] === S.view);
     let body = '';
     if (!S.loaded) body = '<div class="spinner"></div>';
     else if (S.view === 'calendar') body = renderCalendar();
     else if (S.view === 'polls') body = renderPolls();
+    else if (S.view === 'prayer') body = renderPrayer();
     else body = renderMembers();
     $app.innerHTML = `
       <header class="topbar">
@@ -406,6 +415,7 @@
     return `
       <div class="title-row"><div><h1 class="large-title">Members</h1><div class="sub">${S.members.length} ${S.members.length === 1 ? 'person' : 'people'} in ${esc(g.name)}</div></div></div>
       <div style="max-width:640px">
+        ${!feat('members') ? `<div class="notice card">${I.info}<div><b>Hidden from members.</b> The Members tab is turned off for this group, so only organizers see it. Turn it back on in Group Info › Features.</div></div>` : ''}
         <div class="invite card">
           <div class="invite-text">
             <div class="invite-label">Invite people</div>
@@ -427,6 +437,50 @@
         </div>
         <p class="group-foot">Tap someone to email, call or text them. Members of a group can see each other\u2019s email and mobile number.${org ? ' As an organizer, you can also make someone an organizer or remove them there.' : ''}</p>
       </div>`;
+  }
+
+  // ---------- Prayer requests ----------
+  const ago = (iso) => {
+    const s = (Date.now() - new Date(iso)) / 1000;
+    if (s < 60) return 'Just now';
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+    if (s < 7 * 86400) return `${Math.floor(s / 86400)}d ago`;
+    return fmtStamp(iso);
+  };
+  function renderPrayer() {
+    const list = S.prayers || [];
+    return `
+      <div class="title-row">
+        <div><h1 class="large-title">Prayer</h1><div class="sub">Share requests and updates with the group.</div></div>
+        <button class="btn sm" data-action="new-prayer">${I.plus.replace('<svg', '<svg width="16" height="16"')} New Request</button>
+      </div>
+      <div style="max-width:720px">
+      ${list.length ? `<div class="prayer-list">${list.map((p) => {
+        const n = p.comments.length, last = p.comments[n - 1];
+        return `<button class="card prayer-card" data-action="open-prayer" data-id="${esc(p.id)}">
+          <div class="pc-head">${avatar(p.createdBy, p.createdByName)}<div class="pc-who"><b>${esc(p.createdByName)}</b><small>${esc(ago(p.createdAt))}${p.updatedAt ? ' · Edited' : ''}</small></div></div>
+          <h3>${esc(p.title)}</h3>
+          ${p.description ? `<p class="pc-desc">${esc(p.description)}</p>` : ''}
+          <div class="pc-foot">${I.message.replace('<svg', '<svg width="14" height="14"')}<span>${n ? `${n} ${n === 1 ? 'comment' : 'comments'} · Latest from ${esc(last.name)} ${esc(ago(last.at))}` : 'No comments yet'}</span></div>
+        </button>`;
+      }).join('')}</div>`
+      : `<div class="empty">${I.pray}<div>No prayer requests yet.</div><div class="small" style="margin-top:4px">Share what you’d like the group to pray for.</div>
+          <button class="btn sm" style="margin-top:14px" data-action="new-prayer">New Request</button></div>`}
+      </div>`;
+  }
+  function prayerComment(p, c) {
+    const mine = c.userId === S.me.id, editing = S.sheet?.editComment === c.id;
+    const isUpdate = c.userId === p.createdBy;
+    return `<div class="comment${isUpdate ? ' is-update' : ''}" data-cid="${esc(c.id)}">
+      ${avatar(c.userId, c.name)}
+      <div class="cm-body">
+        <div class="cm-meta"><b>${esc(c.name)}${mine ? ' <span class="muted">(you)</span>' : ''}</b>${isUpdate ? '<span class="pill blue">Update</span>' : ''}<small>${esc(ago(c.at))}${c.editedAt ? ' · Edited' : ''}</small></div>
+        ${editing ? `<form class="comment-edit" data-pid="${esc(p.id)}" data-cid="${esc(c.id)}"><textarea name="text" maxlength="2000" aria-label="Edit comment">${esc(c.text)}</textarea>
+            <div class="cm-actions"><button type="button" class="link-btn" data-action="cancel-edit-comment">Cancel</button><button type="submit" class="btn sm">Save</button></div></form>`
+          : `<div class="cm-text">${esc(c.text)}</div>
+            ${canModify(c.userId) ? `<div class="cm-actions"><button class="link-btn" data-action="edit-comment" data-cid="${esc(c.id)}">Edit</button><button class="link-btn danger" data-action="delete-comment" data-pid="${esc(p.id)}" data-cid="${esc(c.id)}">Delete</button></div>` : ''}`}
+      </div></div>`;
   }
 
   // ---------- Onboarding (no groups yet) ----------
@@ -573,15 +627,15 @@
     const html = sheetHtml();
     $sheetRoot.innerHTML = `<div class="backdrop" data-action="backdrop"><div class="sheet ${kind === 'poll' ? 'wide' : ''}" role="dialog" aria-modal="true">${html}</div></div>`;
     document.body.style.overflow = 'hidden';
-    const first = $sheetRoot.querySelector('form:not(.bring-form) input:not([type=date]):not([type=time]):not([type=checkbox])');
+    const first = $sheetRoot.querySelector('form:not(.bring-form):not(.comment-form):not(.comment-edit) input:not([type=date]):not([type=time]):not([type=checkbox])');
     if (first && matchMedia('(min-width: 761px)').matches) setTimeout(() => { if (!$sheetRoot.contains(document.activeElement) || document.activeElement === document.body) first.focus(); }, 60);
-    const form = $sheetRoot.querySelector('form:not(.bring-form)');
+    const form = $sheetRoot.querySelector('form:not(.bring-form):not(.comment-form):not(.comment-edit)');
     if (form) form.addEventListener('submit', (e) => { e.preventDefault(); onSheetSave(); });
     if (form && kind === 'group-new') wireCodeSuggest(form);
   }
   function refreshSheet() {
     const sheet = $sheetRoot.querySelector('.sheet');
-    if (!sheet || !S.sheet || ['event-form', 'poll-form', 'group-new', 'group-join', 'group-edit', 'profile'].includes(S.sheet.kind)) return;
+    if (!sheet || !S.sheet || ['event-form', 'poll-form', 'group-new', 'group-join', 'group-edit', 'profile', 'prayer-form'].includes(S.sheet.kind)) return;
     const body = sheet.querySelector('.sheet-body'), top = body ? body.scrollTop : 0;
     const html = sheetHtml();
     if (!html) return closeSheet();
@@ -593,6 +647,7 @@
     S.sheet = null;
     document.body.style.overflow = '';
     if (S.view === 'polls' && /^#polls\/./.test(location.hash)) history.replaceState(null, '', '#polls');
+    if (S.view === 'prayer' && /^#prayer\/./.test(location.hash)) history.replaceState(null, '', '#prayer');
     if (!bd) return;
     if (instant) { $sheetRoot.innerHTML = ''; return; }
     bd.classList.add('closing');
@@ -760,9 +815,58 @@
           ${org ? `<div class="group-label" style="margin-top:22px">Organizer</div>
           <div class="group kv">
             <div class="row button-row" data-action="edit-group" role="button" tabindex="0">Edit Name &amp; Code<span class="chev">${I.right.replace('<svg', '<svg width="14" height="14"')}</span></div>
+            <div class="row button-row" data-action="group-features" role="button" tabindex="0">Features<span class="v muted" style="margin-left:auto;margin-right:6px">${[g.features?.members !== false && 'Members', g.features?.prayer && 'Prayer'].filter(Boolean).join(', ') || 'None'}</span><span class="chev">${I.right.replace('<svg', '<svg width="14" height="14"')}</span></div>
             <div class="row"><span>Email delivery</span><span class="v" id="email-status">Checking…</span></div>
           </div>` : ''}
           <div class="group" style="margin-top:22px"><div class="row danger-row" data-action="leave-group" role="button" tabindex="0">Leave Group</div></div>
+        </div>`;
+    }
+    if (s.kind === 'group-features') {
+      const g = curGroup(), f = g.features || {};
+      const sw = (k, title, sub) => `<div class="row"><span>${title}<small class="row-sub">${sub}</small></span><label class="switch"><input type="checkbox" data-action="toggle-feature" data-feature="${k}" ${f[k] ? 'checked' : ''}><span></span></label></div>`;
+      return `${head('Features', 'Done')}
+        <div class="sheet-body">
+          <div class="group">
+            ${sw('members', 'Members Tab', 'Everyone can see the member list and contact info')}
+            ${sw('prayer', 'Prayer Requests', 'Members share requests and post comments and updates')}
+          </div>
+          <p class="group-foot">Changes apply to everyone in ${esc(g.name)} right away. When the Members tab is off, organizers still see it and member contact info is hidden from everyone else. Turning off Prayer Requests hides them but keeps them, so they come back if you turn it on again.</p>
+        </div>`;
+    }
+    if (s.kind === 'prayer-form') {
+      const p = s.id ? (S.prayers || []).find((x) => x.id === s.id) : { title: '', description: '' };
+      if (!p) return '';
+      return `<form autocomplete="off">${head(s.id ? 'Edit Request' : 'New Request', 'Cancel', s.id ? 'Save' : 'Share')}
+        <div class="sheet-body">
+          <div class="group">
+            <div class="row"><input name="title" placeholder="Title" maxlength="120" value="${esc(p.title)}" aria-label="Title" required></div>
+            <div class="row stack"><textarea name="description" placeholder="What would you like prayer for?" maxlength="4000" aria-label="Description">${esc(p.description)}</textarea></div>
+          </div>
+          <p class="group-foot">Everyone in ${esc(curGroup().name)} can see this and add comments. You can post updates as comments later.</p>
+          <div id="sheet-msg"></div>
+        </div></form>`;
+    }
+    if (s.kind === 'prayer') {
+      const p = (S.prayers || []).find((x) => x.id === s.id);
+      if (!p) return '';
+      return `${head('Prayer Request', 'Done')}
+        <div class="sheet-body">
+          <div class="prayer-detail">
+            <div class="pc-head">${avatar(p.createdBy, p.createdByName)}<div class="pc-who"><b>${esc(p.createdByName)}${p.createdBy === S.me.id ? ' <span class="muted">(you)</span>' : ''}</b><small>${esc(fmtStamp(p.createdAt))}${p.updatedAt ? ' · Edited' : ''}</small></div></div>
+            <h2>${esc(p.title)}</h2>
+            ${p.description ? `<div class="detail-desc" style="padding:0">${esc(p.description)}</div>` : ''}
+          </div>
+          <div class="group-label" style="margin-top:22px">Comments &amp; Updates${p.comments.length ? ' · ' + p.comments.length : ''}</div>
+          <div class="group comments">
+            ${p.comments.length ? p.comments.map((c) => prayerComment(p, c)).join('') : '<div class="empty small" style="padding:18px;box-shadow:none">No comments yet.</div>'}
+          </div>
+          <form class="comment-form" data-pid="${esc(p.id)}">
+            <textarea name="text" maxlength="2000" placeholder="${p.createdBy === S.me.id ? 'Post an update…' : 'Add a comment…'}" aria-label="Add a comment"></textarea>
+            <button type="submit" class="btn sm">${p.createdBy === S.me.id ? 'Post Update' : 'Comment'}</button>
+          </form>
+          ${canModify(p.createdBy) ? `<div class="actions">
+            <button class="btn tinted block" data-action="edit-prayer" data-id="${esc(p.id)}">Edit Request</button>
+            <button class="btn danger block" data-action="delete-prayer" data-id="${esc(p.id)}">Delete Request</button></div>` : ''}
         </div>`;
     }
     if (s.kind === 'member') {
@@ -776,12 +880,12 @@
             <a class="contact-btn" href="sms:${esc(m.phone)}">${I.message}<span>Text</span></a>
             <a class="contact-btn" href="mailto:${esc(m.email)}">${I.mail}<span>Email</span></a>
           </div>` : ''}
-          <div class="group-label" style="margin-top:22px">Contact</div>
+          ${m.email ? `<div class="group-label" style="margin-top:22px">Contact</div>
           <div class="group kv">
             <div class="row"><span>Mobile</span><span class="v">${m.phone ? `<a class="link" href="tel:${esc(m.phone)}">${esc(fmtPhone(m.phone))}</a>` : 'Not provided'}</span></div>
             <div class="row"><span>Email</span><span class="v"><a class="link" href="mailto:${esc(m.email)}">${esc(m.email)}</a></span></div>
-          </div>
-          ${m.id !== S.me.id ? `<div class="group" style="margin-top:22px"><div class="row button-row" data-action="copy-contact" data-id="${esc(m.id)}" role="button" tabindex="0">Copy Contact Info</div></div>` : ''}
+          </div>` : ''}
+          ${m.id !== S.me.id && m.email ? `<div class="group" style="margin-top:22px"><div class="row button-row" data-action="copy-contact" data-id="${esc(m.id)}" role="button" tabindex="0">Copy Contact Info</div></div>` : ''}
           ${isOrganizer() && m.id !== S.me.id ? `<div class="group-label" style="margin-top:22px">Organizer</div>
           <div class="group">
             ${m.role === 'organizer'
@@ -813,8 +917,14 @@
     return '';
   }
 
+  function upsertPrayer(p) {
+    S.prayers = S.prayers || [];
+    const i = S.prayers.findIndex((x) => x.id === p.id);
+    if (i >= 0) S.prayers[i] = p; else S.prayers.unshift(p);
+    S.prayers.sort((a, b) => (b.lastActivity || b.createdAt).localeCompare(a.lastActivity || a.createdAt));
+  }
   async function onSheetSave() {
-    const s = S.sheet, form = $sheetRoot.querySelector('form:not(.bring-form)');
+    const s = S.sheet, form = $sheetRoot.querySelector('form:not(.bring-form):not(.comment-form):not(.comment-edit)');
     if (!form) return;
     const btn = form.querySelector('button[type=submit]'), msg = form.querySelector('#sheet-msg');
     if (['group-new', 'group-join', 'group-edit'].includes(s.kind)) {
@@ -848,6 +958,14 @@
         S.view = 'polls'; render();
         openSheet('poll', { id: r.poll.id }); history.replaceState(null, '', '#polls/' + r.poll.id);
         toast(s.id ? 'Poll updated' : 'Poll created · Group notified');
+      } else if (s.kind === 'prayer-form') {
+        if (!v.title.trim()) { btn.disabled = false; return err('Please add a title.'); }
+        const body = { title: v.title, description: v.description };
+        const r = s.id ? await api('PUT', gp(`/prayers/${s.id}`), body) : await api('POST', gp('/prayers'), body);
+        upsertPrayer(r.prayer);
+        if (S.view !== 'prayer') S.view = 'prayer';
+        render(); openSheet('prayer', { id: r.prayer.id }); history.replaceState(null, '', '#prayer/' + r.prayer.id);
+        toast(s.id ? 'Request updated' : 'Prayer request shared');
       } else if (s.kind === 'profile') {
         if (v.phone && !validPhone(v.phone)) { btn.disabled = false; return err('That phone number doesn\u2019t look right. Use a 10-digit number like (812) 555-0123, or leave it blank.'); }
         const r = await api('PATCH', '/me', { name: v.name, phone: v.phone || '' });
@@ -1112,6 +1230,37 @@
         if (label) label.scrollIntoView({ block: 'start', behavior: 'smooth' });
       }, 350);
     },
+    'group-features': () => openSheet('group-features'),
+    'toggle-feature': async (el) => {
+      const g = curGroup(), k = el.dataset.feature, on = el.checked;
+      el.disabled = true;
+      try {
+        const r = await api('PATCH', gp(''), { features: { [k]: on } });
+        Object.assign(g, r.group || {}, { features: (r.group && r.group.features) || { ...(g.features || {}), [k]: on } });
+        await loadAll(); render();
+        toast(`${k === 'members' ? 'Members tab' : 'Prayer Requests'} turned ${on ? 'on' : 'off'}`);
+      } catch (ex) { el.checked = !on; toast(ex.message); }
+      el.disabled = false;
+    },
+    'new-prayer': () => openSheet('prayer-form'),
+    'open-prayer': (el) => { openSheet('prayer', { id: el.dataset.id }); history.replaceState(null, '', '#prayer/' + el.dataset.id); },
+    'edit-prayer': (el) => openSheet('prayer-form', { id: el.dataset.id }),
+    'delete-prayer': async (el) => {
+      const p = S.prayers.find((x) => x.id === el.dataset.id);
+      if (!(await ask({ title: `Delete “${p.title}”?`, message: 'The request and all of its comments will be deleted for everyone.', ok: 'Delete', destructive: true }))) return;
+      try { await api('DELETE', gp(`/prayers/${p.id}`)); S.prayers = S.prayers.filter((x) => x.id !== p.id); closeSheet(); render(); toast('Prayer request deleted'); }
+      catch (ex) { toast(ex.message); }
+    },
+    'edit-comment': (el) => {
+      S.sheet.editComment = el.dataset.cid; refreshSheet();
+      const t = $sheetRoot.querySelector('.comment-edit textarea'); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); }
+    },
+    'cancel-edit-comment': () => { S.sheet.editComment = null; refreshSheet(); },
+    'delete-comment': async (el) => {
+      if (!(await ask({ title: 'Delete this comment?', message: 'This can’t be undone.', ok: 'Delete', destructive: true }))) return;
+      try { const r = await api('DELETE', gp(`/prayers/${el.dataset.pid}/comments/${el.dataset.cid}`)); upsertPrayer(r.prayer); refreshSheet(); render(); toast('Comment deleted'); }
+      catch (ex) { toast(ex.message); }
+    },
     'member-actions': (el) => openSheet('member', { id: el.dataset.id }),
     'copy-contact': async (el) => {
       const m = S.members.find((x) => x.id === el.dataset.id);
@@ -1136,12 +1285,28 @@
 
   document.addEventListener('click', (ev) => {
     const el = ev.target.closest('[data-action]');
-    if (!el || (el.tagName === 'INPUT' && el.type === 'checkbox' && ev.type === 'click' && el.dataset.action === 'toggle-notify')) return;
+    if (!el || (el.tagName === 'INPUT' && el.type === 'checkbox' && ['toggle-notify', 'toggle-feature'].includes(el.dataset.action))) return;
     const fn = actions[el.dataset.action];
     if (fn) { if (el.tagName === 'BUTTON' && el.type !== 'submit') ev.preventDefault(); fn(el, ev); }
   });
   document.addEventListener('submit', async (ev) => {
     const f = ev.target;
+    if (f.classList?.contains('comment-form') || f.classList?.contains('comment-edit')) {
+      ev.preventDefault();
+      const text = f.querySelector('textarea').value.trim();
+      if (!text) { f.querySelector('textarea').focus(); return; }
+      const btn = f.querySelector('button[type=submit]'); btn.disabled = true;
+      try {
+        const editing = f.classList.contains('comment-edit');
+        const r = editing ? await api('PUT', gp(`/prayers/${f.dataset.pid}/comments/${f.dataset.cid}`), { text })
+          : await api('POST', gp(`/prayers/${f.dataset.pid}/comments`), { text });
+        if (editing) S.sheet.editComment = null; else f.querySelector('textarea').value = '';
+        upsertPrayer(r.prayer); refreshSheet(); render();
+        if (!editing) { const b = $sheetRoot.querySelector('.sheet-body'); if (b) b.querySelector('.comments .comment:last-child')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+        toast(editing ? 'Comment updated' : 'Posted');
+      } catch (ex) { toast(ex.message); btn.disabled = false; }
+      return;
+    }
     if (!f.classList?.contains('bring-form')) return;
     ev.preventDefault();
     const items = [...f.querySelectorAll('.bring-row')].map((r) => ({ item: r.querySelector('[name="item"]').value.trim(), category: r.querySelector('[name="category"]').value })).filter((x) => x.item);
@@ -1154,6 +1319,7 @@
     const el = ev.target;
     if (el.matches?.('select[data-tp]')) { const tp = el.closest('.tp'); tp.classList.toggle('tp-empty', !tp.querySelector('select').value); }
     if (el.dataset?.action === 'toggle-notify') actions['toggle-notify'](el);
+    if (el.dataset?.action === 'toggle-feature') actions['toggle-feature'](el);
   });
   document.addEventListener('keydown', (ev) => {
     if (ev.key === 'Escape') { if (document.getElementById('group-menu')) closeMenu(); else if (S.sheet) closeSheet(); }
@@ -1163,15 +1329,19 @@
     if (!S.me) { readHash(); return render(); }
     const before = S.view; readHash();
     if (S.pendingPoll) { const id = S.pendingPoll; S.pendingPoll = null; if (S.view !== before) render(); if (S.polls.some((p) => p.id === id)) openSheet('poll', { id }); }
+    else if (S.pendingPrayer) { const id = S.pendingPrayer; S.pendingPrayer = null; render(); if ((S.prayers || []).some((p) => p.id === id)) openSheet('prayer', { id }); }
     else render();
   });
 
   // Keep things fresh while the tab is open
   async function refresh() {
     if (!S.me || document.hidden) return;
-    if (S.sheet && ['event-form', 'poll-form', 'profile', 'group-new', 'group-join', 'group-edit'].includes(S.sheet.kind)) return;
+    if (S.sheet && ['event-form', 'poll-form', 'profile', 'group-new', 'group-join', 'group-edit', 'prayer-form'].includes(S.sheet.kind)) return;
+    if (S.sheet?.editComment) return;
+    const typing = document.querySelector('.comment-form textarea');
+    if (typing && typing.value.trim()) return;
     if (document.getElementById('group-menu')) return;
-    if (document.activeElement?.closest?.('.bring-form')) return;
+    if (document.activeElement?.closest?.('.bring-form, .comment-form, .comment-edit')) return;
     try { await refreshGroups(); if (S.groups.length) await loadAll(); render(); if (S.sheet) refreshSheet(); } catch {}
   }
   setInterval(refresh, 30000);
@@ -1195,6 +1365,7 @@
     await loadAll();
     render();
     if (S.pendingPoll) { const id = S.pendingPoll; S.pendingPoll = null; if (S.polls.some((p) => p.id === id)) openSheet('poll', { id }); }
+    if (S.pendingPrayer) { const id = S.pendingPrayer; S.pendingPrayer = null; if ((S.prayers || []).some((p) => p.id === id)) openSheet('prayer', { id }); }
   }
   (async () => {
     S.linkGroup = new URLSearchParams(location.search).get('g');
