@@ -988,6 +988,7 @@
     const nb = sheet.querySelector('.sheet-body'); if (nb) nb.scrollTop = top;
   }
   function closeSheet(instant) {
+    S.recoveryKey = null;
     const bd = $sheetRoot.querySelector('.backdrop');
     S.sheet = null;
     document.body.style.overflow = '';
@@ -1442,7 +1443,11 @@
             <div class="row"><span>Encryption</span><span class="v">${b.encryption.enabled ? `<span class="pill green">On</span> <small class="muted">key ${esc(b.encryption.fingerprint)}</small>` : '<span class="pill orange">Not set up</span>'}</span></div>
             <div class="row"><span>Automatic backups</span><span class="v">Nightly · kept 30 days</span></div>
           </div>
-          <p class="group-foot">${b.encryption.enabled ? 'Prayer requests and discussions are stored encrypted, and stay encrypted inside backups. Keep a copy of the encryption key somewhere safe — without it, those parts of a backup can’t be read.' : 'Add a DATA_ENCRYPTION_KEY setting in Netlify to encrypt prayer requests and discussions.'}</p>
+          <p class="group-foot">${b.encryption.enabled ? 'Prayer requests and discussions are stored encrypted, and stay encrypted inside backups. Save the recovery key in a password manager \u2014 without it, encrypted posts and backups can\u2019t be read if Netlify is ever lost.' : 'Add a DATA_ENCRYPTION_KEY setting in Netlify to encrypt prayer requests and discussions.'}</p>
+          ${b.encryption.enabled ? `<div class="group">${S.recoveryKey ? `<div class="row stack" style="padding:12px 16px;gap:8px"><span class="small muted">Recovery key (key ${esc(b.encryption.fingerprint)}) \u2014 copy it into your password manager, then close this page.</span>
+              <code class="recovery-key">${esc(S.recoveryKey)}</code>
+              <div style="display:flex;gap:8px"><button class="btn sm" data-action="copy-recovery-key">Copy</button><button class="btn sm tinted" data-action="hide-recovery-key">Hide</button></div></div>`
+            : `<form class="row key-form" autocomplete="off"><input type="password" name="pw" placeholder="Your password to show the recovery key" autocomplete="current-password" aria-label="Your password"><button type="submit" class="btn sm tinted">Show</button></form>`}</div>` : ''}
           <div class="group-label" style="margin-top:22px">Google Drive copy</div>
           ${(() => { const d = b.drive || {};
             if (!d.configured) return `<div class="group"><div class="row"><span class="muted small">Not set up. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Netlify to enable off-site copies.</span></div></div>`;
@@ -2164,6 +2169,8 @@
       if (!(await ask({ title: 'Disconnect Google Drive?', message: 'Nightly copies to Drive will stop. Backups already in your Drive stay there.', ok: 'Disconnect', destructive: true }))) return;
       try { const r = await api('POST', '/admin/gdrive/disconnect', {}); S.backups.drive = r.drive; refreshSheet(); toast('Google Drive disconnected'); } catch (ex) { toast(ex.message); }
     },
+    'copy-recovery-key': async () => toast((await copyText(S.recoveryKey)) ? 'Recovery key copied \u2014 paste it into your password manager' : 'Couldn\u2019t copy \u2014 select the key and copy it manually'),
+    'hide-recovery-key': () => { S.recoveryKey = null; refreshSheet(); },
     'backup-now': async (el) => {
       el.disabled = true; el.textContent = 'Backing up\u2026';
       try { const r = await api('POST', '/admin/backups', {}); S.backups.snapshots = r.snapshots; refreshSheet(); toast(`Backed up ${r.snapshot.records} records`); }
@@ -2214,6 +2221,14 @@
   });
   document.addEventListener('submit', async (ev) => {
     const f = ev.target;
+    if (f.classList?.contains('key-form')) {
+      ev.preventDefault();
+      const pw = f.querySelector('[name="pw"]').value;
+      if (!pw) return f.querySelector('[name="pw"]').focus();
+      try { const r = await api('POST', '/admin/encryption-key', { password: pw }); S.recoveryKey = r.key; refreshSheet(); }
+      catch (ex) { toast(ex.message); }
+      return;
+    }
     if (f.classList?.contains('tc-form') || f.classList?.contains('tc-edit')) {
       ev.preventDefault();
       const text = f.querySelector('textarea').value.trim();
@@ -2300,7 +2315,7 @@
     const typing = document.querySelector('.comment-form textarea, .tc-form textarea');
     if (typing && typing.value.trim()) return;
     if (document.getElementById('group-menu')) return;
-    if (document.activeElement?.closest?.('.bring-form, .comment-form, .comment-edit, .tc-form, .tc-edit')) return;
+    if (document.activeElement?.closest?.('.bring-form, .comment-form, .comment-edit, .tc-form, .tc-edit, .key-form')) return;
     try {
       await refreshGroups(); if (S.groups.length) await loadAll();
       if (S.view === 'topics' && S.topicOpen) { try { S.topicDetail[S.topicOpen] = (await api('GET', gp(`/topics/${S.topicOpen}`))).topic; } catch {} }

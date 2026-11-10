@@ -1064,6 +1064,16 @@ async function driveStatus() {
 }
 const backupFileName = (snap) => `${APP_NAME().toLowerCase()}-backup-${snap.createdAt.slice(0, 16).replace(/[:T]/g, '-')}.json`;
 
+// Netlify hides secret values, so the admin needs a way to save the key off-site. Requires the admin's password again.
+route('POST', '/admin/encryption-key', async ({ req, body, ctx }) => {
+  const u = await requireAdmin(req);
+  rateLimit('keyreveal:' + u.id, 5, 15 * 60e3);
+  if (!verifyPassword(String(body.password || ''), u.pwHash)) throw new HttpError(403, 'That password isn\u2019t right.');
+  const key = env('DATA_ENCRYPTION_KEY');
+  if (!key) throw new HttpError(400, 'No encryption key is set.');
+  console.log(`[security] recovery key viewed by ${u.id}`);
+  return { key, fingerprint: keyFingerprint() };
+});
 route('GET', '/admin/gdrive/connect', async ({ req }) => {
   const u = await requireAdmin(req);
   if (!gConfigured()) throw new HttpError(400, 'Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Netlify first.');
