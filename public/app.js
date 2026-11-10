@@ -192,12 +192,13 @@
     if (view === 'reset' && arg) { S.resetToken = arg; S.authMode = 'reset'; return; }
     if (['calendar', 'polls', 'members', 'prayer', 'meals', 'topics'].includes(view)) S.view = view;
     if (view === 'topics' && arg) S.pendingTopic = arg;
+    if (view === 'topics' && !arg) { S.topicOpen = null; S.editPost = null; }
     if (view === 'meals' && arg) S.pendingTrain = arg;
     if (view === 'prayer' && arg) S.pendingPrayer = arg;
     if (view === 'calendar' && arg && /^\d{4}-\d{2}-\d{2}$/.test(arg)) { S.selected = arg; const d = parseYmd(arg); S.month = new Date(d.getFullYear(), d.getMonth(), 1); }
     if (view === 'polls' && arg) S.pendingPoll = arg;
   }
-  function go(view) { S.view = view; history.replaceState(null, '', '#' + view); render(); window.scrollTo({ top: 0 }); }
+  function go(view) { S.view = view; if (view === 'topics') { S.topicOpen = null; S.editPost = null; } history.replaceState(null, '', '#' + view); render(); window.scrollTo({ top: 0 }); }
 
   // ---------- Render: auth ----------
   function renderAuth() {
@@ -706,60 +707,94 @@
     toast((await copyText(`${text} ${t.publicUrl}`)) ? 'Link copied — paste it in a text, email or post' : 'Couldn\u2019t copy the link');
   }
 
-  // ---------- Discussions ----------
+  // ---------- Discussions (forum layout) ----------
+  const firstOf = (n) => String(n || '').split(' ')[0];
+  const lastPoster = (t) => t.commentCount ? (S.members.find((m) => m.id === (t.lastCommentBy || t.lastBy))?.name || t.lastByName || 'Someone') : t.createdByName;
   function renderTopics() {
+    if (S.topicOpen) return renderThread();
     const list = S.topics || [];
     const unread = list.filter((t) => t.unread).sort((a, b) => b.lastActivity.localeCompare(a.lastActivity));
-    const rest = list.filter((t) => !t.unread); // already newest first
-    const card = (t) => `<button class="card topic-card${t.unread ? ' unread' : ''}" data-action="open-topic" data-id="${esc(t.id)}">
-        <div class="tc-top">${t.unread ? '<span class="unread-dot" aria-label="Unread"></span>' : ''}<h3>${esc(t.title)}</h3></div>
-        <div class="tc-by">${avatar(t.createdBy, t.createdByName, 'xs')}<span>${esc(t.createdByName)} · ${esc(fmtStamp(t.createdAt))}</span></div>
-        ${t.lastComment ? `<p class="tc-preview"><b>${esc(t.lastByName && t.lastBy !== S.me.id ? t.lastByName.split(' ')[0] : (S.members.find((m) => m.id === t.lastCommentBy)?.name || '').split(' ')[0] || 'Latest')}:</b> ${esc(t.lastComment)}</p>`
-          : t.body ? `<p class="tc-preview">${esc(t.body.slice(0, 180))}</p>` : ''}
-        <div class="tc-foot">${I.message.replace('<svg', '<svg width="13" height="13"')}<span>${t.commentCount ? `${t.commentCount} ${t.commentCount === 1 ? 'reply' : 'replies'}` : 'No replies yet'}</span>${t.commentCount ? `<span>· ${esc(ago(t.lastActivity))}</span>` : ''}</div>
-      </button>`;
+    const rest = list.filter((t) => !t.unread); // newest first
+    const row = (t) => {
+      const lp = lastPoster(t), lpId = t.commentCount ? (t.lastCommentBy || t.lastBy) : t.createdBy;
+      return `<a class="forum-row${t.unread ? ' unread' : ''}" href="#topics/${esc(t.id)}" data-action="open-topic" data-id="${esc(t.id)}">
+        <span class="fr-icon" aria-hidden="true">${t.unread ? '<span class="unread-dot"></span>' : I.chat.replace('<svg', '<svg width="18" height="18"')}</span>
+        <span class="fr-main">
+          <span class="fr-title">${esc(t.title)}</span>
+          <span class="fr-meta">Started by ${esc(t.createdByName)} · ${esc(new Date(t.createdAt).toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' }))}<span class="fr-mobile"> · ${t.commentCount} ${t.commentCount === 1 ? 'reply' : 'replies'} · ${t.commentCount ? `last by ${esc(firstOf(lp))} ` : ''}${esc(ago(t.lastActivity))}</span></span>
+        </span>
+        <span class="fr-count"><b>${t.commentCount}</b><small>${t.commentCount === 1 ? 'reply' : 'replies'}</small></span>
+        <span class="fr-last">${avatar(lpId, lp, 'xs')}<span><b>${esc(lp)}</b><small>${esc(ago(t.lastActivity))}</small></span></span>
+      </a>`;
+    };
+    const section = (label, items, badge) => `<div class="forum-section">${esc(label)}${badge ? ` <span class="badge-inline">${items.length}</span>` : ''}</div>${items.map(row).join('')}`;
     return `
       <div class="title-row">
-        <div><h1 class="large-title">Discussions</h1><div class="sub">${unread.length ? `${unread.length} topic${unread.length === 1 ? '' : 's'} with something new` : 'Talk things through together.'}</div></div>
+        <div><h1 class="large-title">Discussions</h1><div class="sub">${list.length ? `${list.length} topic${list.length === 1 ? '' : 's'}${unread.length ? ` · ${unread.length} unread` : ''}` : 'Talk things through together.'}</div></div>
         <button class="btn sm" data-action="new-topic">${I.plus.replace('<svg', '<svg width="16" height="16"')} New Topic</button>
       </div>
-      <div style="max-width:720px">
-        ${unread.length ? `<div class="section-title need-title" style="margin-top:4px">Unread <span class="badge-inline">${unread.length}</span></div><div class="topic-list">${unread.map(card).join('')}</div>` : ''}
-        ${rest.length ? `<div class="section-title"${unread.length ? '' : ' style="margin-top:4px"'}>${unread.length ? 'All topics' : 'Topics'}</div><div class="topic-list">${rest.map(card).join('')}</div>` : ''}
-        ${!list.length ? `<div class="empty">${I.chat}<div>No discussions yet.</div><div class="small" style="margin-top:4px">Start a topic — a question, an idea, or something from this week’s study.</div>
-          <button class="btn sm" style="margin-top:14px" data-action="new-topic">New Topic</button></div>` : ''}
+      ${list.length ? `<div class="forum card" role="list">
+        <div class="forum-head" aria-hidden="true"><span></span><span>Topic</span><span class="fr-count">Replies</span><span class="fr-last">Last post</span></div>
+        ${unread.length ? section('Unread', unread, true) : ''}
+        ${rest.length ? section(unread.length ? 'All topics' : 'Topics', rest) : ''}
+      </div>` : `<div class="empty">${I.chat}<div>No discussions yet.</div><div class="small" style="margin-top:4px">Start a topic — a question, an idea, or something from this week’s study.</div>
+          <button class="btn sm" style="margin-top:14px" data-action="new-topic">New Topic</button></div>`}`;
+  }
+  function renderThread() {
+    const t = (S.topicDetail || {})[S.topicOpen] || (S.topics || []).find((x) => x.id === S.topicOpen);
+    if (!t) return `<div class="empty">This topic was deleted.<div style="margin-top:12px"><button class="btn sm tinted" data-action="topics-back">Back to Discussions</button></div></div>`;
+    const loading = !t.comments, n = t.comments?.length ?? t.commentCount ?? 0;
+    const post = (num, userId, name, at, edited, text, actions, id) => `
+      <article class="post${userId === t.createdBy ? ' op' : ''}" id="post-${num}">
+        <header class="post-head">${avatar(userId, name)}
+          <span class="ph-who"><b>${esc(name)}${userId === S.me.id ? ' <span class="muted">(you)</span>' : ''}</b>${num === 1 ? '<span class="pill blue">Original post</span>' : userId === t.createdBy ? '<span class="pill">Topic starter</span>' : ''}</span>
+          <span class="ph-when"><time title="${esc(fmtStamp(at))}">${esc(ago(at))}</time>${edited ? ' · edited' : ''} <a class="post-num" href="#post-${num}">#${num}</a></span>
+        </header>
+        ${id && S.editPost === id ? `<form class="tc-edit" data-tid="${esc(t.id)}" data-cid="${esc(id)}"><textarea name="text" maxlength="4000" aria-label="Edit reply">${esc(text)}</textarea>
+            <div class="cm-actions"><button type="button" class="link-btn" data-action="cancel-tpost">Cancel</button><button type="submit" class="btn sm">Save</button></div></form>`
+          : `<div class="post-body">${text ? esc(text) : '<span class="muted">No details.</span>'}</div>${actions ? `<footer class="post-actions">${actions}</footer>` : ''}`}
+      </article>`;
+    const opActions = canModify(t.createdBy) ? `<button class="link-btn" data-action="edit-topic" data-id="${esc(t.id)}">Edit</button><button class="link-btn danger" data-action="delete-topic" data-id="${esc(t.id)}">Delete topic</button>` : '';
+    return `
+      <nav class="thread-nav"><button class="link-btn back-link" data-action="topics-back">${I.left.replace('<svg', '<svg width="16" height="16"')} Discussions</button></nav>
+      <div class="thread">
+        <h1 class="thread-title">${esc(t.title)}</h1>
+        <div class="thread-meta">Started by ${esc(t.createdByName)} · ${esc(fmtStamp(t.createdAt))} · ${n} ${n === 1 ? 'reply' : 'replies'}</div>
+        <div class="posts">
+          ${post(1, t.createdBy, t.createdByName, t.createdAt, !!t.updatedAt, t.body, opActions)}
+          ${loading ? '<div class="spinner" style="margin:24px auto"></div>' : t.comments.map((c, i) => post(i + 2, c.userId, c.name, c.at, !!c.editedAt, c.text,
+            canModify(c.userId) ? `<button class="link-btn" data-action="edit-tpost" data-cid="${esc(c.id)}">Edit</button><button class="link-btn danger" data-action="delete-tcomment" data-tid="${esc(t.id)}" data-cid="${esc(c.id)}">Delete</button>` : '', c.id)).join('')}
+        </div>
+        <form class="tc-form post-reply card" data-tid="${esc(t.id)}">
+          <div class="pr-head">${avatar(S.me.id, S.me.name, 'xs')}<b>Reply as ${esc(firstOf(S.me.name))}</b></div>
+          <textarea name="text" maxlength="4000" placeholder="Write a reply…" aria-label="Write a reply"></textarea>
+          <div class="pr-actions"><button type="submit" class="btn sm">Post Reply</button></div>
+        </form>
       </div>`;
   }
-  async function openTopic(id) {
+  async function openTopic(id, opts = {}) {
     const t = (S.topics || []).find((x) => x.id === id);
     if (t) t.unread = false;
     S.topicDetail = S.topicDetail || {};
     if (!S.topicDetail[id] && t) S.topicDetail[id] = { ...t, comments: null };
-    openSheet('topic', { id }); history.replaceState(null, '', '#topics/' + id); render();
+    S.view = 'topics'; S.topicOpen = id; S.editPost = null;
+    history.replaceState(null, '', '#topics/' + id);
+    render(); if (!opts.keepScroll) window.scrollTo({ top: 0 });
     try {
       const r = await api('GET', gp(`/topics/${id}`));
       S.topicDetail[id] = r.topic;
-      if (S.sheet?.kind === 'topic' && S.sheet.id === id) refreshSheet();
+      if (S.topicOpen === id && !threadBusy()) render();
     } catch (ex) { toast(ex.message); }
   }
+  // Don't redraw a thread while someone is typing a reply or editing a post
+  const threadBusy = () => !!S.editPost || !!document.querySelector('.tc-form textarea')?.value.trim() || !!document.activeElement?.closest?.('.tc-form, .tc-edit');
+  function closeTopic() { S.topicOpen = null; S.editPost = null; history.replaceState(null, '', '#topics'); render(); window.scrollTo({ top: 0 }); }
   function upsertTopic(t) {
     S.topicDetail = S.topicDetail || {}; S.topicDetail[t.id] = t;
     S.topics = S.topics || [];
     const summary = { ...t, comments: undefined, unread: false, lastByName: S.members.find((m) => m.id === t.lastBy)?.name || '' };
     const i = S.topics.findIndex((x) => x.id === t.id);
     if (i >= 0) S.topics[i] = summary; else S.topics.unshift(summary);
-  }
-  function topicComment(t, c) {
-    const mine = c.userId === S.me.id, editing = S.sheet?.editComment === c.id, op = c.userId === t.createdBy;
-    return `<div class="comment" data-cid="${esc(c.id)}">
-      ${avatar(c.userId, c.name)}
-      <div class="cm-body">
-        <div class="cm-meta"><b>${esc(c.name)}${mine ? ' <span class="muted">(you)</span>' : ''}</b>${op ? '<span class="pill">Started topic</span>' : ''}<small>${esc(ago(c.at))}${c.editedAt ? ' · Edited' : ''}</small></div>
-        ${editing ? `<form class="tc-edit" data-tid="${esc(t.id)}" data-cid="${esc(c.id)}"><textarea name="text" maxlength="4000" aria-label="Edit comment">${esc(c.text)}</textarea>
-            <div class="cm-actions"><button type="button" class="link-btn" data-action="cancel-edit-comment">Cancel</button><button type="submit" class="btn sm">Save</button></div></form>`
-          : `<div class="cm-text">${esc(c.text)}</div>
-            ${canModify(c.userId) ? `<div class="cm-actions"><button class="link-btn" data-action="edit-comment" data-cid="${esc(c.id)}">Edit</button><button class="link-btn danger" data-action="delete-tcomment" data-tid="${esc(t.id)}" data-cid="${esc(c.id)}">Delete</button></div>` : ''}`}
-      </div></div>`;
   }
 
   // ---------- Onboarding (no groups yet) ----------
@@ -843,7 +878,7 @@
   async function switchGroup(gid) {
     closeMenu(); closeSheet(true);
     S.gid = gid; store.set('sg_group', gid);
-    S.loaded = false; S.events = []; S.polls = []; S.members = []; S.trains = []; S.prayers = []; S.topics = []; S.topicDetail = {};
+    S.loaded = false; S.events = []; S.polls = []; S.members = []; S.trains = []; S.prayers = []; S.topics = []; S.topicDetail = {}; S.topicOpen = null;
     render();
     await loadAll();
     render();
@@ -928,7 +963,7 @@
     if (S.view === 'polls' && /^#polls\/./.test(location.hash)) history.replaceState(null, '', '#polls');
     if (S.view === 'prayer' && /^#prayer\/./.test(location.hash)) history.replaceState(null, '', '#prayer');
     if (S.view === 'meals' && /^#meals\/./.test(location.hash)) history.replaceState(null, '', '#meals');
-    if (S.view === 'topics' && /^#topics\/./.test(location.hash)) history.replaceState(null, '', '#topics');
+
     if (!bd) return;
     if (instant) { $sheetRoot.innerHTML = ''; return; }
     bd.classList.add('closing');
@@ -1366,30 +1401,6 @@
           <div id="sheet-msg"></div>
         </div></form>`;
     }
-    if (s.kind === 'topic') {
-      const t = (S.topicDetail || {})[s.id];
-      if (!t) return '';
-      const loading = !t.comments;
-      return `${head('Discussion', 'Done')}
-        <div class="sheet-body">
-          <div class="prayer-detail">
-            <div class="pc-head">${avatar(t.createdBy, t.createdByName)}<div class="pc-who"><b>${esc(t.createdByName)}${t.createdBy === S.me.id ? ' <span class="muted">(you)</span>' : ''}</b><small>${esc(fmtStamp(t.createdAt))}${t.updatedAt ? ' · Edited' : ''}</small></div></div>
-            <h2>${esc(t.title)}</h2>
-            ${t.body ? `<div class="detail-desc" style="padding:0">${esc(t.body)}</div>` : ''}
-          </div>
-          <div class="group-label" style="margin-top:22px">Replies${t.comments?.length ? ' · ' + t.comments.length : ''}</div>
-          <div class="group comments">
-            ${loading ? '<div class="spinner" style="margin:18px auto"></div>' : t.comments.length ? t.comments.map((c) => topicComment(t, c)).join('') : '<div class="empty small" style="padding:18px;box-shadow:none">No replies yet. Start the conversation!</div>'}
-          </div>
-          <form class="comment-form tc-form" data-tid="${esc(t.id)}">
-            <textarea name="text" maxlength="4000" placeholder="Write a reply…" aria-label="Write a reply"></textarea>
-            <button type="submit" class="btn sm">Reply</button>
-          </form>
-          ${canModify(t.createdBy) ? `<div class="actions">
-            <button class="btn tinted block" data-action="edit-topic" data-id="${esc(t.id)}">Edit Topic</button>
-            <button class="btn danger block" data-action="delete-topic" data-id="${esc(t.id)}">Delete Topic</button></div>` : ''}
-        </div>`;
-    }
     if (s.kind === 'member') {
       const m = S.members.find((x) => x.id === s.id);
       if (!m) return '';
@@ -1516,7 +1527,7 @@
         if (!v.title.trim()) { btn.disabled = false; return err('Please give the topic a title.'); }
         const r = s.id ? await api('PUT', gp(`/topics/${s.id}`), { title: v.title, body: v.body }) : await api('POST', gp('/topics'), { title: v.title, body: v.body });
         upsertTopic(r.topic);
-        S.view = 'topics'; render(); openSheet('topic', { id: r.topic.id }); history.replaceState(null, '', '#topics/' + r.topic.id);
+        closeSheet(true); openTopic(r.topic.id);
         toast(s.id ? 'Topic updated' : 'Topic posted');
       } else if (s.kind === 'meal-form') {
         const days = [...form.querySelectorAll('[name="day"]:checked')].map((x) => Number(x.value));
@@ -1936,17 +1947,23 @@
     'group-features': () => openSheet('group-features'),
     'new-train': () => openSheet('meal-form'),
     'new-topic': () => openSheet('topic-form'),
-    'open-topic': (el) => openTopic(el.dataset.id),
+    'open-topic': (el, ev) => { ev?.preventDefault?.(); openTopic(el.dataset.id); },
+    'topics-back': () => closeTopic(),
+    'edit-tpost': (el) => {
+      S.editPost = el.dataset.cid; render();
+      const t = document.querySelector('.tc-edit textarea'); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); }
+    },
+    'cancel-tpost': () => { S.editPost = null; render(); },
     'edit-topic': (el) => openSheet('topic-form', { id: el.dataset.id }),
     'delete-topic': async (el) => {
       const t = S.topicDetail[el.dataset.id];
       if (!(await ask({ title: `Delete \u201c${t.title}\u201d?`, message: 'The topic and all of its replies will be deleted for everyone.', ok: 'Delete', destructive: true }))) return;
-      try { await api('DELETE', gp(`/topics/${t.id}`)); S.topics = S.topics.filter((x) => x.id !== t.id); delete S.topicDetail[t.id]; closeSheet(); render(); toast('Topic deleted'); }
+      try { await api('DELETE', gp(`/topics/${t.id}`)); S.topics = S.topics.filter((x) => x.id !== t.id); delete S.topicDetail[t.id]; closeTopic(); toast('Topic deleted'); }
       catch (ex) { toast(ex.message); }
     },
     'delete-tcomment': async (el) => {
       if (!(await ask({ title: 'Delete this reply?', message: 'This can\u2019t be undone.', ok: 'Delete', destructive: true }))) return;
-      try { const r = await api('DELETE', gp(`/topics/${el.dataset.tid}/comments/${el.dataset.cid}`)); upsertTopic(r.topic); refreshSheet(); render(); toast('Reply deleted'); }
+      try { const r = await api('DELETE', gp(`/topics/${el.dataset.tid}/comments/${el.dataset.cid}`)); upsertTopic(r.topic); render(); toast('Reply deleted'); }
       catch (ex) { toast(ex.message); }
     },
     'open-train': (el) => { openSheet('meal', { id: el.dataset.id }); history.replaceState(null, '', '#meals/' + el.dataset.id); },
@@ -2064,9 +2081,9 @@
         const editing = f.classList.contains('tc-edit');
         const r = editing ? await api('PUT', gp(`/topics/${f.dataset.tid}/comments/${f.dataset.cid}`), { text })
           : await api('POST', gp(`/topics/${f.dataset.tid}/comments`), { text });
-        if (editing) S.sheet.editComment = null; else f.querySelector('textarea').value = '';
-        upsertTopic(r.topic); refreshSheet(); render();
-        if (!editing) $sheetRoot.querySelector('.comments .comment:last-child')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        if (editing) S.editPost = null; else f.querySelector('textarea').value = '';
+        upsertTopic(r.topic); render();
+        if (!editing) [...document.querySelectorAll('.posts .post')].pop()?.scrollIntoView({ block: 'center', behavior: 'smooth' });
         toast(editing ? 'Reply updated' : 'Replied');
       } catch (ex) { toast(ex.message); btn.disabled = false; }
       return;
@@ -2124,11 +2141,16 @@
     if (!S.groups.length) return; // join/create screen: never redraw it, or it wipes what someone is typing
     if (S.sheet && ['event-form', 'poll-form', 'profile', 'group-new', 'group-join', 'group-edit', 'prayer-form', 'meal-form', 'meal-signup', 'topic-form'].includes(S.sheet.kind)) return;
     if (S.sheet?.editComment) return;
+    if (S.view === 'topics' && S.topicOpen && threadBusy()) return;
     const typing = document.querySelector('.comment-form textarea, .tc-form textarea');
     if (typing && typing.value.trim()) return;
     if (document.getElementById('group-menu')) return;
     if (document.activeElement?.closest?.('.bring-form, .comment-form, .comment-edit, .tc-form, .tc-edit')) return;
-    try { await refreshGroups(); if (S.groups.length) await loadAll(); render(); if (S.sheet) refreshSheet(); } catch {}
+    try {
+      await refreshGroups(); if (S.groups.length) await loadAll();
+      if (S.view === 'topics' && S.topicOpen) { try { S.topicDetail[S.topicOpen] = (await api('GET', gp(`/topics/${S.topicOpen}`))).topic; } catch {} }
+      render(); if (S.sheet) refreshSheet();
+    } catch {}
   }
   setInterval(refresh, 30000);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
