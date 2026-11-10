@@ -754,22 +754,34 @@
             <div class="cm-actions"><button type="button" class="link-btn" data-action="cancel-tpost">Cancel</button><button type="submit" class="btn sm">Save</button></div></form>`
           : `<div class="post-body">${text ? esc(text) : '<span class="muted">No details.</span>'}</div>${actions ? `<footer class="post-actions">${actions}</footer>` : ''}`}
       </article>`;
+    const newest = store.get('sg_reply_order') === 'desc';
+    const replies = loading ? [] : t.comments.map((c, i) => post(i + 2, c.userId, c.name, c.at, !!c.editedAt, c.text,
+      canModify(c.userId) ? `<button class="link-btn" data-action="edit-tpost" data-cid="${esc(c.id)}">Edit</button><button class="link-btn danger" data-action="delete-tcomment" data-tid="${esc(t.id)}" data-cid="${esc(c.id)}">Delete</button>` : '', c.id));
+    if (newest) replies.reverse();
+    const replyBox = `<form class="tc-form post-reply card" data-tid="${esc(t.id)}">
+          <div class="pr-head">${avatar(S.me.id, S.me.name, 'xs')}<b>Reply as ${esc(firstOf(S.me.name))}</b></div>
+          <textarea name="text" maxlength="4000" placeholder="Write a reply…" aria-label="Write a reply"></textarea>
+          <div class="pr-actions"><button type="submit" class="btn sm">Post Reply</button></div>
+        </form>`;
+    const orderToggle = `<div class="reply-order" role="group" aria-label="Reply order">
+        <span class="ro-label">Replies</span>
+        <div class="segmented ro-seg"><span class="thumb" style="width:calc(50% - 2px);transform:translateX(${newest ? 100 : 0}%)"></span>
+          <button type="button" aria-pressed="${!newest}" aria-selected="${!newest}" data-action="reply-order" data-order="asc">Oldest first</button>
+          <button type="button" aria-pressed="${newest}" aria-selected="${newest}" data-action="reply-order" data-order="desc">Newest first</button></div>
+      </div>`;
     const opActions = canModify(t.createdBy) ? `<button class="link-btn" data-action="edit-topic" data-id="${esc(t.id)}">Edit</button><button class="link-btn danger" data-action="delete-topic" data-id="${esc(t.id)}">Delete topic</button>` : '';
     return `
       <nav class="thread-nav"><button class="link-btn back-link" data-action="topics-back">${I.left.replace('<svg', '<svg width="16" height="16"')} Discussions</button></nav>
       <div class="thread">
         <h1 class="thread-title">${esc(t.title)}</h1>
         <div class="thread-meta">Started by ${esc(t.createdByName)} · ${esc(fmtStamp(t.createdAt))} · ${n} ${n === 1 ? 'reply' : 'replies'}</div>
-        <div class="posts">
-          ${post(1, t.createdBy, t.createdByName, t.createdAt, !!t.updatedAt, t.body, opActions)}
-          ${loading ? '<div class="spinner" style="margin:24px auto"></div>' : t.comments.map((c, i) => post(i + 2, c.userId, c.name, c.at, !!c.editedAt, c.text,
-            canModify(c.userId) ? `<button class="link-btn" data-action="edit-tpost" data-cid="${esc(c.id)}">Edit</button><button class="link-btn danger" data-action="delete-tcomment" data-tid="${esc(t.id)}" data-cid="${esc(c.id)}">Delete</button>` : '', c.id)).join('')}
+        <div class="posts">${post(1, t.createdBy, t.createdByName, t.createdAt, !!t.updatedAt, t.body, opActions)}</div>
+        ${orderToggle}
+        ${newest ? replyBox : ''}
+        <div class="posts replies">
+          ${loading ? '<div class="spinner" style="margin:24px auto"></div>' : replies.length ? replies.join('') : '<div class="empty small" style="padding:18px">No replies yet. Start the conversation!</div>'}
         </div>
-        <form class="tc-form post-reply card" data-tid="${esc(t.id)}">
-          <div class="pr-head">${avatar(S.me.id, S.me.name, 'xs')}<b>Reply as ${esc(firstOf(S.me.name))}</b></div>
-          <textarea name="text" maxlength="4000" placeholder="Write a reply…" aria-label="Write a reply"></textarea>
-          <div class="pr-actions"><button type="submit" class="btn sm">Post Reply</button></div>
-        </form>
+        ${newest ? '' : replyBox}
       </div>`;
   }
   async function openTopic(id, opts = {}) {
@@ -1949,6 +1961,12 @@
     'new-topic': () => openSheet('topic-form'),
     'open-topic': (el, ev) => { ev?.preventDefault?.(); openTopic(el.dataset.id); },
     'topics-back': () => closeTopic(),
+    'reply-order': (el) => {
+      if ((store.get('sg_reply_order') || 'asc') === el.dataset.order) return;
+      const draft = document.querySelector('.tc-form textarea')?.value || '';
+      store.set('sg_reply_order', el.dataset.order); render();
+      const box = document.querySelector('.tc-form textarea'); if (box && draft) box.value = draft; // keep anything typed
+    },
     'edit-tpost': (el) => {
       S.editPost = el.dataset.cid; render();
       const t = document.querySelector('.tc-edit textarea'); if (t) { t.focus(); t.setSelectionRange(t.value.length, t.value.length); }
@@ -2083,7 +2101,7 @@
           : await api('POST', gp(`/topics/${f.dataset.tid}/comments`), { text });
         if (editing) S.editPost = null; else f.querySelector('textarea').value = '';
         upsertTopic(r.topic); render();
-        if (!editing) [...document.querySelectorAll('.posts .post')].pop()?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        if (!editing) { const all = [...document.querySelectorAll('.replies .post')]; (store.get('sg_reply_order') === 'desc' ? all[0] : all.pop())?.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
         toast(editing ? 'Reply updated' : 'Replied');
       } catch (ex) { toast(ex.message); btn.disabled = false; }
       return;
