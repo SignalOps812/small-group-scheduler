@@ -31,6 +31,50 @@
     const [h, m] = t.split(':').map(Number);
     return `${((h + 11) % 12) + 1}:${pad(m)} ${h < 12 ? 'AM' : 'PM'}`;
   };
+  // ---------- Time zones ----------
+  // Times are stored as wall-clock time + IANA zone. Older items have no zone and read as the viewer's own.
+  const TZ_LIST = [
+    ['America/New_York', 'Eastern'], ['America/Chicago', 'Central'], ['America/Denver', 'Mountain'], ['America/Phoenix', 'Arizona'],
+    ['America/Los_Angeles', 'Pacific'], ['America/Anchorage', 'Alaska'], ['Pacific/Honolulu', 'Hawaii'], ['America/Halifax', 'Atlantic'],
+    ['UTC', 'UTC'], ['Europe/London', 'London'], ['Europe/Berlin', 'Central Europe'], ['Asia/Kolkata', 'India'], ['Asia/Tokyo', 'Japan'], ['Australia/Sydney', 'Sydney'],
+  ];
+  const tzOffset = (ts, tz) => {
+    try {
+      const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        .formatToParts(new Date(ts)).map((x) => [x.type, x.value]));
+      return Date.UTC(+p.year, p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second) - ts;
+    } catch { return 0; }
+  };
+  const zonedInstant = (date, time, tz) => { // the real moment a wall-clock time happens in a zone
+    const [y, mo, d] = date.split('-').map(Number), [h, mi] = time.split(':').map(Number);
+    const wall = Date.UTC(y, mo - 1, d, h, mi);
+    let t = wall;
+    for (let i = 0; i < 3; i++) t = wall - tzOffset(t, tz);
+    return new Date(t);
+  };
+  const DEVICE_TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; } })();
+  // Zones that keep the same clock all year are interchangeable (e.g. Indianapolis = Eastern)
+  const sameRules = (a, b) => { const y = new Date().getFullYear(); return [0, 3, 6, 10].every((m) => tzOffset(Date.UTC(y, m, 15), a) === tzOffset(Date.UTC(y, m, 15), b)); };
+  const HOME_TZ = (TZ_LIST.find(([z]) => z === DEVICE_TZ) || TZ_LIST.find(([z]) => sameRules(z, DEVICE_TZ)) || [DEVICE_TZ])[0];
+  const tzName = (tz) => (TZ_LIST.find(([z]) => z === tz) || [, (tz.split('/').pop() || tz).replace(/_/g, ' ')])[1];
+  const tzAbbr = (date, time, tz) => {
+    try { return new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'short' }).formatToParts(zonedInstant(date, time || '12:00', tz)).find((x) => x.type === 'timeZoneName')?.value || tzName(tz); }
+    catch { return tzName(tz); }
+  };
+  const isLocalTz = (date, time, tz) => !tz || tzOffset(zonedInstant(date, time, tz).getTime(), tz) === -zonedInstant(date, time, tz).getTimezoneOffset() * 6e4;
+  // "7:00 PM" in the viewer's zone, "7:00 PM CST" when the item is set in a different zone
+  const fmtWhenTime = (x) => !x.time ? '' : fmtTime(x.time) + (isLocalTz(x.date, x.time, x.tz) ? '' : ' ' + tzAbbr(x.date, x.time, x.tz));
+  const localEquivalent = (x) => { // "8:00 PM your time" for items set in another zone
+    if (!x.time || isLocalTz(x.date, x.time, x.tz)) return '';
+    const d = zonedInstant(x.date, x.time, x.tz), sameDay = ymd(d) === x.date;
+    return `${d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' })}${sameDay ? '' : ' ' + d.toLocaleDateString(undefined, { weekday: 'short' })} your time`;
+  };
+  function tzSelect(name, value, label = 'Time zone') {
+    const v = value || HOME_TZ, opts = TZ_LIST.slice();
+    if (!opts.some(([z]) => z === v)) opts.unshift([v, tzName(v)]);
+    if (!opts.some(([z]) => z === HOME_TZ)) opts.unshift([HOME_TZ, tzName(HOME_TZ)]);
+    return `<select class="tz-select" name="${name}" aria-label="${esc(label)}" title="${esc(label)} (defaults to yours: ${esc(tzName(HOME_TZ))})">${opts.map(([z, n]) => `<option value="${esc(z)}"${z === v ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select>`;
+  }
   const fmtCost = (c) => (c === null || c === undefined ? '' : c === 0 ? 'Free' : `$${Number(c).toFixed(c % 1 ? 2 : 0)}`);
   const fmtStamp = (iso) => {
     const d = new Date(iso.includes('T') ? iso : iso.replace(' ', 'T') + 'Z');
@@ -435,7 +479,7 @@
     return `<button class="event" style="--c:${colorFor(e.createdBy)}" data-action="open-event" data-id="${esc(e.id)}">
       <span class="bar"></span>
       <span><span class="title">${esc(e.title)}</span><span class="meta">${meta}</span></span>
-      <span class="side"><span class="time">${e.time ? fmtTime(e.time) : 'All day'}</span><span class="pills">${e.pitchIn ? `<span class="pill purple">Pitch-in${bringCount(e.contributions) ? ' · ' + bringCount(e.contributions) : ''}</span>` : ''}${cost ? `<span class="pill ${e.cost === 0 ? 'green' : ''}">${esc(cost)}</span>` : ''}</span></span>
+      <span class="side"><span class="time">${e.time ? esc(fmtWhenTime(e)) : 'All day'}</span><span class="pills">${e.pitchIn ? `<span class="pill purple">Pitch-in${bringCount(e.contributions) ? ' · ' + bringCount(e.contributions) : ''}</span>` : ''}${cost ? `<span class="pill ${e.cost === 0 ? 'green' : ''}">${esc(cost)}</span>` : ''}</span></span>
     </button>`;
   }
 
@@ -459,7 +503,7 @@
         </div>
         <div class="foot">
           <span>${p.responders.length} of ${n} responded</span>
-          <span>${chosen ? `${esc(fmtShort(chosen.date))}${chosen.time ? ' · ' + fmtTime(chosen.time) : ''}` : best ? `Leading: ${esc(fmtShort(best.date))}` : ''}</span>
+          <span>${chosen ? `${esc(fmtShort(chosen.date))}${chosen.time ? ' · ' + esc(fmtWhenTime(chosen)) : ''}` : best ? `Leading: ${esc(fmtShort(best.date))}` : ''}</span>
         </div>
       </button>`;
     };
@@ -479,7 +523,7 @@
         </div>
         <div class="foot">
           <span>${flat.length} item${flat.length === 1 ? '' : 's'} from ${people} ${people === 1 ? 'person' : 'people'}</span>
-          <span>${esc(fmtShort(e.date))}${e.time ? ' · ' + fmtTime(e.time) : ''}</span>
+          <span>${esc(fmtShort(e.date))}${e.time ? ' · ' + esc(fmtWhenTime(e)) : ''}</span>
         </div>
       </button>`;
     };
@@ -777,6 +821,7 @@
           <div class="group">
             <div class="row"><label for="ev-date">Date</label><input id="ev-date" name="date" type="date" value="${esc(e.date)}" required></div>
             <div class="row"><label>Time</label>${timePicker('time', e.time, 'Event time')}</div>
+            <div class="row"><label for="ev-tz">Time zone</label>${tzSelect('tz', e.tz).replace('<select', '<select id="ev-tz"')}</div>
             <div class="row"><label for="ev-cost">Cost</label><span class="prefix">$</span><input id="ev-cost" name="cost" inputmode="decimal" placeholder="0.00 (leave blank if none)" value="${e.cost ?? ''}"></div>
           </div>
           <div class="group">
@@ -798,7 +843,8 @@
           <div class="detail-hero">
             <div class="date-tile"><div class="m">${esc(monAbbr(e.date))}</div><div class="d">${parseYmd(e.date).getDate()}</div></div>
             <h2>${esc(e.title)}</h2>
-            <div class="w">${esc(fmtLongY(e.date))}${e.time ? ' · ' + fmtTime(e.time) : ' · All day'}</div>
+            <div class="w">${esc(fmtLongY(e.date))}${e.time ? ' · ' + esc(fmtWhenTime(e)) : ' · All day'}</div>
+            ${localEquivalent(e) ? `<div class="w tz-note">${esc(localEquivalent(e))}</div>` : ''}
           </div>
           ${kv.length ? `<div class="group kv">${kv.map(([k, v]) => `<div class="row"><span>${k}</span><span class="v">${esc(v)}</span></div>`).join('')}</div>` : ''}
           ${e.description ? `<div class="group-label" style="margin-top:22px">Details</div><div class="group"><div class="detail-desc">${esc(e.description)}</div></div>` : ''}
@@ -813,7 +859,7 @@
     if (s.kind === 'poll-form') {
       const p = s.id ? S.polls.find((x) => x.id === s.id) : null;
       const d = p || { title: '', location: '', cost: null, description: '', options: [{ date: '', time: '' }, { date: '', time: '' }] };
-      const opts = d.options.map((o) => ({ id: o.id || '', date: o.date, time: o.time }));
+      const opts = d.options.map((o) => ({ id: o.id || '', date: o.date, time: o.time, tz: o.tz }));
       return `<form autocomplete="off" novalidate>${head(p ? 'Edit Poll' : 'New Poll', 'Cancel', p ? 'Save' : 'Create')}
         <div class="sheet-body">
           <div class="group">
@@ -856,7 +902,7 @@
         return `<div class="${cls}">
           <div class="head">
             <div class="date-tile"><div class="m">${esc(monAbbr(o.date))}</div><div class="d">${parseYmd(o.date).getDate()}</div></div>
-            <div class="when"><b>${esc(parseYmd(o.date).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' }))}</b><span>${o.time ? fmtTime(o.time) : 'Time TBD'}</span></div>
+            <div class="when"><b>${esc(parseYmd(o.date).toLocaleDateString(undefined, { weekday: 'long', month: 'short', day: 'numeric' }))}</b><span>${o.time ? esc(fmtWhenTime(o)) : 'Time TBD'}${localEquivalent(o) ? `<small class="tz-note">${esc(localEquivalent(o))}</small>` : ''}</span></div>
             <div class="tally">
               ${chosen && chosen.id === o.id ? '<span class="pill blue">Scheduled</span>' : best && best.id === o.id ? '<span class="pill green">Most popular</span>' : ''}
               <span class="avatar-stack">${yes.slice(0, 4).map((v) => avatar(v.userId, v.name, 'xs')).join('')}</span>
@@ -877,7 +923,7 @@
             <h2>${esc(p.title)}</h2>
             <div class="w">Started by ${esc(p.createdByName)}</div>
           </div>
-          ${chosen ? `<div class="group" style="margin-bottom:22px"><div class="row button-row" data-action="goto-date" data-date="${chosen.date}">${I.check.replace('<svg', '<svg width="18" height="18"')} On the calendar · ${esc(fmtShort(chosen.date))}${chosen.time ? ' · ' + fmtTime(chosen.time) : ''}<span class="chev">${I.right.replace('<svg', '<svg width="14" height="14"')}</span></div></div>` : ''}
+          ${chosen ? `<div class="group" style="margin-bottom:22px"><div class="row button-row" data-action="goto-date" data-date="${chosen.date}">${I.check.replace('<svg', '<svg width="18" height="18"')} On the calendar · ${esc(fmtShort(chosen.date))}${chosen.time ? ' · ' + esc(fmtWhenTime(chosen)) : ''}<span class="chev">${I.right.replace('<svg', '<svg width="14" height="14"')}</span></div></div>` : ''}
           ${kv.length ? `<div class="group kv">${kv.map(([k, v]) => `<div class="row"><span>${k}</span><span class="v">${esc(v)}</span></div>`).join('')}</div>` : ''}
           ${p.description ? `<div class="group" style="margin-top:22px"><div class="detail-desc">${esc(p.description)}</div></div>` : ''}
           <div class="group-label" style="margin-top:26px">${open ? 'Mark which dates work for you' : 'Results'}</div>
@@ -1074,7 +1120,7 @@
         if (!v.title.trim()) { btn.disabled = false; return err('Please add a title.'); }
         if (!v.date) { btn.disabled = false; return err('Please choose a date.'); }
         v.time = readTime(form, 'time');
-        const body = { title: v.title, location: v.location, date: v.date, time: v.time, cost: v.cost, description: v.description, pitchIn: !!form.elements.pitchIn?.checked };
+        const body = { title: v.title, location: v.location, date: v.date, time: v.time, tz: v.tz, cost: v.cost, description: v.description, pitchIn: !!form.elements.pitchIn?.checked };
         const r = s.id ? await api('PUT', gp(`/events/${s.id}`), body) : await api('POST', gp('/events'), body);
         await loadAll();
         S.selected = r.event.date; const d = parseYmd(r.event.date); S.month = new Date(d.getFullYear(), d.getMonth(), 1);
@@ -1178,8 +1224,10 @@
     const k = 'o' + (++rowSeq);
     return `<div class="row opt-row" data-key="${k}" data-id="${esc(o.id || '')}">
       <button type="button" class="opt-remove" data-action="remove-opt" aria-label="Remove this date" ${removable ? '' : 'disabled'}>${I.minus.replace('<svg', '<svg width="22" height="22"')}</button>
-      <input type="date" name="${k}_d" value="${esc(o.date)}" aria-label="Date" class="opt-date">
-      ${timePicker(k + '_t', o.time, 'Time')}
+      <div class="opt-fields">
+        <input type="date" name="${k}_d" value="${esc(o.date)}" aria-label="Date" class="opt-date">
+        <div class="opt-time">${timePicker(k + '_t', o.time, 'Time')}${tzSelect(k + '_z', o.tz)}</div>
+      </div>
     </div>`;
   }
   function readOptions(form) {
@@ -1187,6 +1235,7 @@
       id: r.dataset.id || undefined,
       date: r.querySelector('.opt-date').value,
       time: readTime(r, r.dataset.key + '_t'),
+      tz: r.querySelector(`[name="${r.dataset.key}_z"]`)?.value || HOME_TZ,
     }));
   }
   function refreshRemoveButtons(form) {
@@ -1199,7 +1248,11 @@
     const icsEsc = (s) => String(s || '').replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/[,;]/g, (c) => '\\' + c);
     const d = e.date.replace(/-/g, '');
     let when;
-    if (e.time) {
+    if (e.time && e.tz) { // exact moment in UTC so it lands right in any calendar app
+      const start = zonedInstant(e.date, e.time, e.tz), end = new Date(start.getTime() + 2 * 3600e3);
+      const u = (x) => x.toISOString().replace(/[-:]/g, '').replace(/\.\d+/, '');
+      when = `DTSTART:${u(start)}\r\nDTEND:${u(end)}`;
+    } else if (e.time) {
       const [h, m] = e.time.split(':').map(Number);
       const end = new Date(2000, 0, 1, h + 2, m);
       const endDay = end.getDate() > 1 ? ymd(new Date(parseYmd(e.date).getTime() + 864e5)).replace(/-/g, '') : d;
@@ -1248,8 +1301,9 @@
       const lastDate = last?.querySelector('.opt-date').value || '';
       const date = lastDate ? ymd(new Date(parseYmd(lastDate).getTime() + 7 * 864e5 + 3600e3)) : ''; // same weekday next week
       const time = last ? readTime(last, last.dataset.key + '_t') : '';
+      const tz = last?.querySelector(`[name="${last.dataset.key}_z"]`)?.value;
       const tmp = document.createElement('div');
-      tmp.innerHTML = optRow({ date, time }, true);
+      tmp.innerHTML = optRow({ date, time, tz }, true);
       const row = tmp.firstElementChild;
       if (last && !time) { // keep whatever AM/PM and minutes were picked even if the hour isn't set yet
         const k = last.dataset.key, nk = row.dataset.key;
@@ -1286,7 +1340,7 @@
     schedule: async (el) => {
       const p = S.polls.find((x) => x.id === el.dataset.poll);
       const o = p.options.find((x) => x.id === el.dataset.opt);
-      if (!(await ask({ title: `Schedule for ${fmtLong(o.date)}${o.time ? ' at ' + fmtTime(o.time) : ''}?`, message: `“${p.title}” will go on the calendar, voting will close, and everyone will get an email.`, ok: 'Schedule' }))) return;
+      if (!(await ask({ title: `Schedule for ${fmtLong(o.date)}${o.time ? ' at ' + fmtWhenTime(o) : ''}?`, message: `“${p.title}” will go on the calendar, voting will close, and everyone will get an email.`, ok: 'Schedule' }))) return;
       try {
         await api('POST', gp(`/polls/${p.id}/schedule`), { optionId: o.id });
         await loadAll(); refreshSheet(); render(); toast('Scheduled · Added to the calendar');

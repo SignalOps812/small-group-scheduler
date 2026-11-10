@@ -226,6 +226,33 @@ function fmtTime(t) {
   const [h, mi] = t.split(':').map(Number);
   return `${((h + 11) % 12) + 1}:${String(mi).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`;
 }
+// Time zones: times are wall-clock times in an IANA zone ('' = older items with no zone)
+const validTz = (v) => {
+  const t = typeof v === 'string' ? v.trim().slice(0, 64) : '';
+  if (!t) return '';
+  try { new Intl.DateTimeFormat('en-US', { timeZone: t }); return t; } catch { return ''; }
+};
+function tzOffset(ts, tz) {
+  const p = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    .formatToParts(new Date(ts)).map((x) => [x.type, x.value]));
+  return Date.UTC(+p.year, p.month - 1, +p.day, +p.hour % 24, +p.minute, +p.second) - ts;
+}
+function zonedInstant(date, time, tz) {
+  const [y, mo, d] = date.split('-').map(Number), [h, mi] = time.split(':').map(Number);
+  const wall = Date.UTC(y, mo - 1, d, h, mi);
+  let t = wall;
+  for (let i = 0; i < 3; i++) t = wall - tzOffset(t, tz);
+  return new Date(t);
+}
+// "7:00 PM EST" — emails always name the zone since we don't know where the reader is
+function fmtTimeTz(date, time, tz) {
+  if (!time) return '';
+  if (!tz) return fmtTime(time);
+  try {
+    const abbr = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'short' }).formatToParts(zonedInstant(date, time, tz)).find((x) => x.type === 'timeZoneName')?.value;
+    return `${fmtTime(time)}${abbr ? ' ' + abbr : ''}`;
+  } catch { return fmtTime(time); }
+}
 const fmtCost = (c) => (c === null || c === undefined ? '' : c === 0 ? 'Free' : `$${Number(c).toFixed(c % 1 ? 2 : 0)}`);
 
 function emailShell(label, heading, bodyHtml, ctaText, ctaUrl, footer) {
@@ -284,7 +311,7 @@ const deepLink = (gid, hash) => `${APP_URL()}/?g=${encodeURIComponent(gid)}#${ha
 
 function notifyNewEvent(ctx, group, ev, byName, viaPoll) {
   if (!notifyOf(group)[viaPoll ? 'scheduled' : 'event']) return;
-  const when = `${fmtDate(ev.date)}${ev.time ? ' at ' + fmtTime(ev.time) : ''}`;
+  const when = `${fmtDate(ev.date)}${ev.time ? ' at ' + fmtTimeTz(ev.date, ev.time, ev.tz) : ''}`;
   const link = deepLink(group.id, `calendar/${ev.date}`);
   const intro = `<p style="margin:0 0 8px">${esc(byName)} ${viaPoll ? 'picked the final date from the poll' : 'added an event to the calendar'}.</p>` +
     (ev.pitchIn ? `<p style="margin:0 0 8px"><b>It\u2019s a pitch-in.</b> Open the event to see who\u2019s bringing what and add your dish.</p>` : '');
@@ -298,7 +325,7 @@ function notifyNewEvent(ctx, group, ev, byName, viaPoll) {
 function notifyNewPoll(ctx, group, poll, byName) {
   if (!notifyOf(group).poll) return;
   const link = deepLink(group.id, `polls/${poll.id}`);
-  const list = poll.options.map((o) => `<li style="margin:2px 0">${esc(fmtDate(o.date))}${o.time ? ' · ' + esc(fmtTime(o.time)) : ''}</li>`).join('');
+  const list = poll.options.map((o) => `<li style="margin:2px 0">${esc(fmtDate(o.date))}${o.time ? ' · ' + esc(fmtTimeTz(o.date, o.time, o.tz)) : ''}</li>`).join('');
   return notifyGroup('poll', ctx, group,
     `New poll: ${poll.title} — please vote`,
     `Help pick a date: ${esc(poll.title)}`,
@@ -385,7 +412,7 @@ function readEventBody(body) {
   if (!title) throw new HttpError(400, 'Please add a title.');
   if (!isDate(date)) throw new HttpError(400, 'Please choose a date.');
   if (!isTime(time)) throw new HttpError(400, 'Please choose a valid time.');
-  return { title, description, location, date, time, cost: parseCost(body.cost), pitchIn: !!body.pitchIn };
+  return { title, description, location, date, time, tz: time ? validTz(body.tz) : '', cost: parseCost(body.cost), pitchIn: !!body.pitchIn };
 }
 
 // ---------- Routes ----------
@@ -768,10 +795,10 @@ route('POST', '/groups/:gid/polls', async ({ req, body, params, ctx }) => {
   if (!title) throw new HttpError(400, 'Please add a title.');
   const seen = new Set(), options = [];
   for (const o of (Array.isArray(body.options) ? body.options : []).slice(0, 30)) {
-    const date = str(o?.date, 10), time = str(o?.time, 5);
-    if (!isDate(date) || !isTime(time) || seen.has(date + time)) continue;
-    seen.add(date + time);
-    options.push({ id: newId(), date, time });
+    const date = str(o?.date, 10), time = str(o?.time, 5), tz = time ? validTz(o?.tz) : '';
+    if (!isDate(date) || !isTime(time) || seen.has(date + time + tz)) continue;
+    seen.add(date + time + tz);
+    options.push({ id: newId(), date, time, tz });
   }
   if (options.length < 2) throw new HttpError(400, 'Add at least two date options for people to vote on.');
   options.sort((a, b) => (a.date + a.time).localeCompare(b.date + b.time));
@@ -794,15 +821,16 @@ route('PUT', '/groups/:gid/polls/:id', async ({ req, body, params }) => {
   const existing = new Map(poll.options.map((o) => [o.id, o]));
   const seen = new Set(), options = [], cleared = new Set();
   for (const o of (Array.isArray(body.options) ? body.options : []).slice(0, 30)) {
-    const date = str(o?.date, 10), time = str(o?.time, 5);
-    if (!isDate(date) || !isTime(time) || seen.has(date + time)) continue;
-    seen.add(date + time);
+    const date = str(o?.date, 10), time = str(o?.time, 5), tz = time ? validTz(o?.tz) : '';
+    if (!isDate(date) || !isTime(time) || seen.has(date + time + tz)) continue;
+    seen.add(date + time + tz);
     const prev = typeof o.id === 'string' ? existing.get(o.id) : null;
     if (prev) {
-      if (prev.date !== date || prev.time !== time) cleared.add(prev.id); // answered for a different time
-      options.push({ id: prev.id, date, time });
+      // answered for a different time (a zone added to an older option doesn't count as a change)
+      if (prev.date !== date || prev.time !== time || (prev.tz && prev.tz !== tz)) cleared.add(prev.id);
+      options.push({ id: prev.id, date, time, tz });
     } else {
-      options.push({ id: newId(), date, time });
+      options.push({ id: newId(), date, time, tz });
     }
   }
   if (options.length < 2) throw new HttpError(400, 'Add at least two date options for people to vote on.');
@@ -862,7 +890,7 @@ route('POST', '/groups/:gid/polls/:id/schedule', async ({ req, body, params, ctx
   if (poll.status !== 'open') throw new HttpError(400, 'A date has already been picked for this poll.');
   const opt = poll.options.find((o) => o.id === body.optionId);
   if (!opt) throw new HttpError(400, 'Please choose one of the poll’s dates.');
-  const ev = { id: newId(), title: poll.title, description: poll.description, date: opt.date, time: opt.time, cost: poll.cost,
+  const ev = { id: newId(), title: poll.title, description: poll.description, date: opt.date, time: opt.time, tz: opt.tz || '', cost: poll.cost,
     location: poll.location, pitchIn: !!poll.pitchIn, createdBy: m.user.id, pollId: poll.id, createdAt: now() };
   await put(`g/${m.group.id}/events/${ev.id}`, ev);
   if (poll.pitchIn) { // carry everyone's pitch-in items over to the calendar event

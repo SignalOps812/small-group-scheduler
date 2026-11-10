@@ -204,7 +204,18 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 
 /* ---------- Calendar ---------- */
 .cal-layout { display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr); gap: 22px; align-items: start; }
-@media (max-width: 900px) { .cal-layout { grid-template-columns: 1fr; } }
+@media (max-width: 900px) { .cal-layout { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 380px) {
+  .cal { padding: 14px 10px 12px; }
+  .cal-head { gap: 6px; }
+  .cal-head h2 { font-size: 17px; }
+  .cal-head .nav { gap: 2px; }
+  .cal-head .today-btn { padding: 6px 4px; font-size: 14px; }
+  .cal-head .icon-btn { width: 30px; height: 30px; }
+}
+.cal-head { min-width: 0; }
+.cal-head h2 { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cal-head .nav { flex: none; }
 .card { background: var(--bg-elev); border-radius: var(--r-lg); box-shadow: var(--shadow); }
 .cal { padding: 18px 16px 14px; }
 .cal-head { display: flex; align-items: center; justify-content: space-between; padding: 0 4px 14px; }
@@ -355,7 +366,9 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .sheet-head .l { justify-self: start; color: var(--blue); font-size: 17px; }
 .sheet-head .r { justify-self: end; color: var(--blue); font-size: 17px; font-weight: 600; }
 .sheet-head button[disabled] { color: var(--label-3); }
-.sheet-body { overflow-y: auto; padding: 22px 16px 28px; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+.sheet > form { display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
+.sheet-head { flex: none; }
+.sheet-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 22px 16px 28px; -webkit-overflow-scrolling: touch; overscroll-behavior: contain; touch-action: pan-y; }
 .sheet-body .group-label { margin-left: 16px; }
 @media (max-width: 760px) {
   .backdrop { place-items: end stretch; padding: 0; padding-top: 44px; }
@@ -469,10 +482,37 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .tp-colon { color: var(--label-2); font-weight: 600; padding: 0 1px; }
 .tp.tp-empty select:not([name$="_h"]), .tp.tp-empty .tp-colon { opacity: .4; }
 .row .tp { padding: 6px 0; }
-.opt-row { gap: 10px; flex-wrap: wrap; }
-.row.opt-row input.opt-date { flex: 1 1 140px; text-align: left; color: var(--blue); }
+.row.opt-row { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 10px; align-items: center; padding-top: 8px; padding-bottom: 8px; }
+.opt-fields { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-width: 0; }
+.row.opt-row input.opt-date {
+  flex: 1 1 150px; min-width: 0; width: auto; padding: 7px 10px; font-size: 16px; text-align: left; color: var(--blue);
+  background: var(--fill-2); border-radius: 8px; -webkit-appearance: none; appearance: none; min-height: 36px; box-sizing: border-box;
+}
+.row.opt-row input.opt-date::-webkit-date-and-time-value { text-align: left; }
+.opt-time { display: flex; align-items: center; gap: 6px; margin-left: auto; flex: 0 0 auto; }
+.opt-time .tp { margin-left: 0; padding: 0; }
 .opt-remove[disabled] { opacity: .3; cursor: default; }
-@media (max-width: 420px) { .opt-row .tp { margin-left: 34px; } }
+/* Phones: date on its own line, time + zone underneath, everything inside the screen */
+@media (max-width: 520px) {
+  .opt-time .tp select { padding: 6px 6px; min-width: 38px; }
+  .opt-time .tp select[name$="_p"] { margin-left: 2px; }
+  .opt-fields { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .row.opt-row input.opt-date { width: 100%; }
+  .opt-time { margin-left: 0; justify-content: space-between; flex-wrap: wrap; row-gap: 8px; }
+}
+/* Time zone picker — same pill style as the time selects */
+.row select.tz-select, .tz-select {
+  flex: 0 1 auto; min-width: 0; max-width: 100%; appearance: none; -webkit-appearance: none; border: 0; outline: 0; cursor: pointer;
+  font-size: 16px; color: var(--blue); background: var(--fill-2); padding: 6px 26px 6px 10px; border-radius: 8px; margin-left: auto;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23007aff' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M7 10l5 5 5-5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 8px center; background-size: 12px;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.opt-time .tz-select { margin-left: 0; }
+.tz-select:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--blue) 40%, transparent); }
+.tz-note { color: var(--label-3); font-size: 13px; }
+.option .when .tz-note { display: block; }
+.detail-hero .tz-note { margin-top: 2px; }
 
 /* ---------- Member contact ---------- */
 .person-btn { width: 100%; text-align: left; cursor: pointer; }
