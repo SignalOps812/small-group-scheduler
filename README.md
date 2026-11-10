@@ -67,6 +67,21 @@ pick a date range, which weekdays need a meal, a drop-off window, food notes and
 - Coordinators get an email for each sign-up, change or cancellation, can see volunteers' contact info, remove sign-ups,
   close sign-ups, or make a new link (which turns the old one off).
 
+## Security, encryption and backups
+
+**Settings** (Netlify › Site configuration › Environment variables, mark secret ones as *Secret*):
+
+| Variable | Purpose |
+|---|---|
+| `DATA_ENCRYPTION_KEY` *(secret)* | Encrypts prayer requests, discussions and backup files (AES-256-GCM). Keep a copy somewhere safe (a password manager) — **without it, encrypted data and backups can't be read**. Don't change it once set. |
+| `ADMIN_EMAILS` | Comma-separated sign-in emails that can open Profile › Site Backups. |
+| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` *(secret)* | Optional: off-site copies to Google Drive. |
+
+- Existing prayer requests and discussions are encrypted automatically the first time the app runs with a key.
+- **Nightly backups** (`backup-nightly`, 3 AM Eastern) snapshot all data into a separate `smallgroup-backups` store; 30 nightly snapshots are kept. Site admins can back up now, download (encrypted, compressed file) and restore. A restore first saves a safety snapshot.
+- **Google Drive**: create a Google Cloud OAuth client (Web application) with redirect URI `https://<your-domain>/api/admin/gdrive/callback`, enable the Google Drive API, set the OAuth consent screen to **In production** (in *Testing*, Google expires the connection after 7 days), then use *Connect Google Drive* in Site Backups. The app only gets the `drive.file` scope (files it creates).
+- Deploy previews and branch deploys use their own separate data store, so test code never touches production data.
+
 ## Notes
 - **Free Netlify plan:** fine for a small group. Every page load makes a few quick function calls.
 - **Upgrading from the single-group version:** on first launch, existing members, events and polls move automatically into one group named after `APP_NAME`, with a generated code. The old organizer becomes its organizer, and can see and change the code under Group Info.

@@ -873,3 +873,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .segmented.theme-seg { display: grid; width: 100%; max-width: 360px; }
 .theme-seg button { font-size: 14px; }
 :root { transition: background-color .2s ease; }
+.snap-row { gap: 10px; }
+.snap-row .btn.sm { flex: none; padding: 0 12px; }
+.file-btn { display: grid; place-items: center; cursor: pointer; }
+@media (max-width: 420px) { .snap-row { flex-wrap: wrap; } .snap-row .nm { flex-basis: 100%; } }

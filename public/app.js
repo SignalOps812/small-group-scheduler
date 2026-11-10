@@ -201,6 +201,7 @@
   function readHash() {
     const [view, arg] = location.hash.replace(/^#\/?/, '').split('/');
     if (view === 'reset' && arg) { S.resetToken = arg; S.authMode = 'reset'; return; }
+    if (view && view.startsWith('backups')) { S.pendingBackups = (view.split('drive=')[1] || 'open'); return; }
     if (['calendar', 'polls', 'members', 'prayer', 'meals', 'topics'].includes(view)) S.view = view;
     if (view === 'topics' && arg) S.pendingTopic = arg;
     if (view === 'topics' && !arg) { S.topicOpen = null; S.editPost = null; }
@@ -1431,6 +1432,55 @@
           <div id="sheet-msg"></div>
         </div></form>`;
     }
+    if (s.kind === 'backups') {
+      const b = S.backups;
+      const reasonLabel = { nightly: 'Nightly', manual: 'Manual', 'before-restore': 'Before restore', imported: 'Uploaded file' };
+      return `${head('Site Backups', 'Done')}
+        <div class="sheet-body">
+          ${!b ? '<div class="spinner" style="margin:30px auto"></div>' : `
+          <div class="group kv">
+            <div class="row"><span>Encryption</span><span class="v">${b.encryption.enabled ? `<span class="pill green">On</span> <small class="muted">key ${esc(b.encryption.fingerprint)}</small>` : '<span class="pill orange">Not set up</span>'}</span></div>
+            <div class="row"><span>Automatic backups</span><span class="v">Nightly · kept 30 days</span></div>
+          </div>
+          <p class="group-foot">${b.encryption.enabled ? 'Prayer requests and discussions are stored encrypted, and stay encrypted inside backups. Keep a copy of the encryption key somewhere safe — without it, those parts of a backup can’t be read.' : 'Add a DATA_ENCRYPTION_KEY setting in Netlify to encrypt prayer requests and discussions.'}</p>
+          <div class="group-label" style="margin-top:22px">Google Drive copy</div>
+          ${(() => { const d = b.drive || {};
+            if (!d.configured) return `<div class="group"><div class="row"><span class="muted small">Not set up. Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Netlify to enable off-site copies.</span></div></div>`;
+            if (!d.connected) return `<div class="group"><div class="row button-row" data-action="gdrive-connect" role="button" tabindex="0">Connect Google Drive<span class="chev">${I.right.replace('<svg', '<svg width="14" height="14"')}</span></div></div>
+              <p class="group-foot">Each night\u2019s backup is also saved, encrypted, to a \u201cGroups Backups\u201d folder in your Drive (newest 30 kept). The app can only see files it creates there.</p>`;
+            return `<div class="group kv">
+                <div class="row"><span>Account</span><span class="v">${esc(d.account || 'Connected')}</span></div>
+                <div class="row"><span>Last copy</span><span class="v">${d.lastUploadAt ? esc(fmtStamp(d.lastUploadAt)) : 'Not yet'}</span></div>
+                ${d.lastError ? `<div class="row"><span>Problem</span><span class="v" style="color:var(--red)">${esc(d.lastError)}</span></div>` : ''}
+                ${d.folderUrl ? `<div class="row button-row"><a class="link" href="${esc(d.folderUrl)}" target="_blank" rel="noopener">Open the backups folder</a></div>` : ''}
+                <div class="row button-row" data-action="gdrive-upload" role="button" tabindex="0">Copy to Drive Now</div>
+                <div class="row danger-row" data-action="gdrive-disconnect" role="button" tabindex="0">Disconnect</div>
+              </div>
+              <p class="group-foot">Copies are encrypted with the site\u2019s encryption key. To restore one, download it from Drive and use Restore from a File.</p>`; })()}
+          <div class="actions" style="margin-top:6px">
+            <button class="btn block" data-action="backup-now">Back Up Now</button>
+            <label class="btn tinted block file-btn">Restore from a File…<input type="file" accept="application/json,.json" data-action="backup-import" hidden></label>
+          </div>
+          <div class="group-label" style="margin-top:26px">Snapshots · ${b.snapshots.length}</div>
+          <div class="group people">
+            ${b.snapshots.length ? b.snapshots.map((x) => `<div class="person snap-row">
+              <span class="nm">${esc(new Date(x.at).toLocaleString(undefined, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }))}
+                <small>${esc(reasonLabel[x.reason] || x.reason)} · ${x.records} records</small></span>
+              <button class="btn sm tinted" data-action="backup-download" data-key="${esc(x.key)}">Download</button>
+              <button class="btn sm danger" data-action="backup-restore" data-key="${esc(x.key)}">Restore</button>
+            </div>`).join('') : '<div class="person"><div class="nm muted">No snapshots yet. The first nightly backup runs at 3 AM Eastern, or tap Back Up Now.</div></div>'}
+          </div>
+          <p class="group-foot">Restoring replaces everything with the snapshot. A safety snapshot of the current data is taken first, so a restore can be undone. Downloads are full copies of the site’s data — store them privately.</p>`}
+        </div>`;
+    }
+    if (s.kind === 'restore-confirm') {
+      return `<form autocomplete="off" novalidate>${head('Restore Backup', 'Cancel', 'Restore', true)}
+        <div class="sheet-body">
+          <div class="notice card">${I.info}<div><b>This replaces all of the site’s data</b> — every group, event, poll, prayer request, discussion and meal train — with the snapshot from <b>${esc(s.label)}</b>. Anything added since then will be gone (a safety snapshot is saved first).</div></div>
+          <div class="group"><div class="row"><input name="confirm" placeholder="Type RESTORE to confirm" autocapitalize="characters" aria-label="Type RESTORE to confirm" data-restore-confirm></div></div>
+          <div id="sheet-msg"></div>
+        </div></form>`;
+    }
     if (s.kind === 'member') {
       const m = S.members.find((x) => x.id === s.id);
       if (!m) return '';
@@ -1487,6 +1537,8 @@
               .map(([k, label, sub]) => `<div class="row"><span>${esc(label)}${sub ? `<small class="row-sub">${sub}</small>` : ''}</span><label class="switch"><input type="checkbox" data-action="toggle-pref" data-key="${k}" ${(m.notifyPrefs || {})[k] !== false ? 'checked' : ''} ${m.notify ? '' : 'disabled'}><span></span></label></div>`).join('')}
           </div>
           <p class="group-foot">Choose which emails you get. Group organizers can also turn some emails off for everyone in a group.</p>
+          ${m.isAdmin ? `<div class="group-label" style="margin-top:22px">Site admin</div>
+          <div class="group"><div class="row button-row" data-action="open-backups" role="button" tabindex="0">Site Backups<span class="chev">${I.right.replace('<svg', '<svg width="14" height="14"')}</span></div></div>` : ''}
           <div class="group" style="margin-top:22px"><div class="row button-row" data-action="replay-tour" role="button" tabindex="0">Take the Tour<span class="chev">${I.right.replace('<svg', '<svg width="14" height="14"')}</span></div></div>
           <div class="group" style="margin-top:22px"><div class="row danger-row" data-action="logout" role="button" tabindex="0">Sign Out</div></div>
           <div id="sheet-msg"></div>
@@ -1560,6 +1612,12 @@
           openSheet('poll', { id: r.poll.id }); history.replaceState(null, '', '#polls/' + r.poll.id);
           toast(s.id ? 'Poll updated' : 'Poll created · Group notified');
         }
+      } else if (s.kind === 'restore-confirm') {
+        if (v.confirm.trim() !== 'RESTORE') { btn.disabled = false; return err('Type RESTORE (in capitals) to confirm.'); }
+        btn.textContent = 'Restoring\u2026';
+        const r = await api('POST', '/admin/backups/restore', s.key ? { key: s.key, confirm: 'RESTORE' } : { snapshot: s.snapshot, confirm: 'RESTORE' });
+        toast(`Restored ${r.restored} records · Reloading\u2026`);
+        setTimeout(() => location.reload(), 900);
       } else if (s.kind === 'topic-form') {
         if (!v.title.trim()) { btn.disabled = false; return err('Please give the topic a title.'); }
         const r = s.id ? await api('PUT', gp(`/topics/${s.id}`), { title: v.title, body: v.body }) : await api('POST', gp('/topics'), { title: v.title, body: v.body });
@@ -2090,6 +2148,41 @@
       seg.querySelectorAll('button').forEach((b) => { const on = b === el; b.setAttribute('aria-checked', on); b.setAttribute('aria-selected', on); });
       seg.querySelector('.thumb').style.transform = `translateX(${[...seg.querySelectorAll('button')].indexOf(el) * 100}%)`;
     },
+    'open-backups': async () => {
+      S.backups = null; openSheet('backups');
+      try { S.backups = await api('GET', '/admin/backups'); refreshSheet(); } catch (ex) { toast(ex.message); closeSheet(); }
+    },
+    'gdrive-connect': async () => {
+      try { const r = await api('GET', '/admin/gdrive/connect'); location.href = r.url; } catch (ex) { toast(ex.message); }
+    },
+    'gdrive-upload': async (el) => {
+      el.textContent = 'Copying\u2026';
+      try { const r = await api('POST', '/admin/gdrive/upload', {}); Object.assign(S.backups, { drive: r.drive, snapshots: r.snapshots }); refreshSheet(); toast('Copied to Google Drive'); }
+      catch (ex) { toast(ex.message); try { S.backups = await api('GET', '/admin/backups'); refreshSheet(); } catch {} }
+    },
+    'gdrive-disconnect': async () => {
+      if (!(await ask({ title: 'Disconnect Google Drive?', message: 'Nightly copies to Drive will stop. Backups already in your Drive stay there.', ok: 'Disconnect', destructive: true }))) return;
+      try { const r = await api('POST', '/admin/gdrive/disconnect', {}); S.backups.drive = r.drive; refreshSheet(); toast('Google Drive disconnected'); } catch (ex) { toast(ex.message); }
+    },
+    'backup-now': async (el) => {
+      el.disabled = true; el.textContent = 'Backing up\u2026';
+      try { const r = await api('POST', '/admin/backups', {}); S.backups.snapshots = r.snapshots; refreshSheet(); toast(`Backed up ${r.snapshot.records} records`); }
+      catch (ex) { toast(ex.message); el.disabled = false; el.textContent = 'Back Up Now'; }
+    },
+    'backup-download': async (el) => {
+      try {
+        const r = await api('GET', '/admin/backups/download?key=' + encodeURIComponent(el.dataset.key));
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([JSON.stringify(r.file)], { type: 'application/json' }));
+        a.download = r.name;
+        document.body.appendChild(a); a.click(); a.remove();
+        toast('Backup downloaded \u2014 keep it somewhere private');
+      } catch (ex) { toast(ex.message); }
+    },
+    'backup-restore': (el) => {
+      const x = S.backups.snapshots.find((y) => y.key === el.dataset.key);
+      openSheet('restore-confirm', { key: x.key, label: new Date(x.at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) });
+    },
     'replay-tour': () => { closeSheet(true); startTour(true); },
     'member-actions': (el) => openSheet('member', { id: el.dataset.id }),
     'copy-contact': async (el) => {
@@ -2161,8 +2254,21 @@
     try { await saveBring(f.dataset.kind, f.dataset.id, items); toast(items.length === 1 ? 'Thanks — you\u2019re signed up' : `Thanks — you\u2019re signed up for ${items.length} items`); }
     catch (ex) { toast(ex.message); btn.disabled = false; }
   });
-  document.addEventListener('change', (ev) => {
+  document.addEventListener('input', (ev) => {
+    if (ev.target.matches?.('[data-restore-confirm]')) ev.target.closest('form').querySelector('button[type=submit]').disabled = ev.target.value.trim() !== 'RESTORE';
+  });
+  document.addEventListener('change', async (ev) => {
     const el = ev.target;
+    if (el.dataset?.action === 'backup-import' && el.files?.[0]) {
+      const f = el.files[0]; el.value = '';
+      try {
+        const snap = JSON.parse(await f.text());
+        if (snap?.app !== 'groups' || !snap.data) throw new Error('That file isn\u2019t a Groups backup.');
+        if (!S.me.isAdmin) throw new Error('Only site admins can restore backups.');
+        openSheet('restore-confirm', { snapshot: snap, label: `${f.name} (${new Date(snap.createdAt).toLocaleDateString()})` });
+      } catch (ex) { toast(ex.message.startsWith('Unexpected') ? 'That file isn\u2019t a valid backup.' : ex.message); }
+      return;
+    }
     if (el.matches?.('select[data-tp]')) { const tp = el.closest('.tp'); tp.classList.toggle('tp-empty', !tp.querySelector('select').value); }
     if (el.dataset?.action === 'toggle-notify') actions['toggle-notify'](el);
     if (el.dataset?.action === 'toggle-feature') actions['toggle-feature'](el);
@@ -2225,6 +2331,12 @@
     if (S.pendingPrayer) { const id = S.pendingPrayer; S.pendingPrayer = null; if ((S.prayers || []).some((p) => p.id === id)) openSheet('prayer', { id }); }
     if (S.pendingTrain) { const id = S.pendingTrain; S.pendingTrain = null; if ((S.trains || []).some((t) => t.id === id)) openSheet('meal', { id }); }
     if (S.pendingTopic) { const id = S.pendingTopic; S.pendingTopic = null; if ((S.topics || []).some((t) => t.id === id)) openTopic(id); }
+    if (S.pendingBackups && S.me.isAdmin) {
+      const r = S.pendingBackups; S.pendingBackups = null; history.replaceState(null, '', '#' + S.view);
+      await actions['open-backups']();
+      const msg = { connected: 'Google Drive connected', cancelled: 'Google Drive wasn\u2019t connected', expired: 'That took too long \u2014 try connecting again', error: 'Couldn\u2019t connect Google Drive \u2014 try again' }[r];
+      if (msg) toast(msg);
+    }
   }
   (async () => {
     S.linkGroup = new URLSearchParams(location.search).get('g');

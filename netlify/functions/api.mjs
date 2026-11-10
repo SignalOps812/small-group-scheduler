@@ -20,6 +20,7 @@
 //   mtactive/<gid>/<mtid>           trains the hourly reminder job checks
 //   g/<gid>/bring/<p|e>-<id>/<uid>  { target, userId, items: [{ item, category }], at }   — pitch-in sign-ups
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import { getStore } from '@netlify/blobs';
 
 const env = (k, d = '') => (globalThis.Netlify?.env?.get?.(k) ?? process.env[k] ?? d);
@@ -34,10 +35,68 @@ export const config = { path: '/api/*' };
 // ---------- Storage ----------
 // Create the store per request: Netlify gives each invocation a fresh, short-lived
 // access token, so a store cached across invocations eventually fails with "Token expired".
-let _store = null;
-const store = () => (_store ||= getStore({ name: 'smallgroup', consistency: 'strong' }));
-const get = (key) => store().get(key, { type: 'json' });
-const put = (key, val) => store().setJSON(key, val);
+let _store = null, _storeName = 'smallgroup';
+// Previews and branch deploys get their own data so test code can never touch the live site's.
+// Anything else (including production and unknown values) uses the live store.
+function useStoreFor(context) {
+  const c = context?.deploy?.context || process.env.CONTEXT || '';
+  _storeName = ['deploy-preview', 'branch-deploy', 'dev'].includes(c) ? `smallgroup-${c}` : 'smallgroup';
+  _store = null;
+}
+const store = () => (_store ||= getStore({ name: _storeName, consistency: 'strong' }));
+const backupStore = () => getStore({ name: `${_storeName}-backups`, consistency: 'strong' });
+
+// ---------- Encryption at rest ----------
+// Prayer requests and discussions are sealed with AES-256-GCM before they're stored, using a key
+// derived from the DATA_ENCRYPTION_KEY setting (kept in Netlify, never in the data or the code).
+// Each value is bound to its storage key, so encrypted text can't be moved to another record.
+// Older plain-text records still read fine and are converted once a key is set.
+const SEALED = [
+  [/^g\/[^/]+\/prayer\/[^/]+$/, ['title', 'description']],
+  [/^g\/[^/]+\/prayerc\/[^/]+\/[^/]+$/, ['text']],
+  [/^g\/[^/]+\/topics\/[^/]+$/, ['title', 'body', 'lastComment']],
+  [/^g\/[^/]+\/topicc\/[^/]+\/[^/]+$/, ['text']],
+];
+const sealedFields = (key) => SEALED.find(([re]) => re.test(key))?.[1] || null;
+let _dataKey;
+function dataKey() {
+  if (_dataKey !== undefined) return _dataKey;
+  const secret = env('DATA_ENCRYPTION_KEY');
+  _dataKey = secret ? Buffer.from(crypto.hkdfSync('sha256', secret, 'groups-app', 'data-encryption-v1', 32)) : null;
+  return _dataKey;
+}
+const keyFingerprint = () => (dataKey() ? crypto.createHash('sha256').update(dataKey()).digest('hex').slice(0, 12) : null);
+function seal(text, aad) {
+  const k = dataKey();
+  if (!k || typeof text !== 'string' || !text || text.startsWith('enc1:')) return text;
+  const iv = crypto.randomBytes(12), c = crypto.createCipheriv('aes-256-gcm', k, iv);
+  c.setAAD(Buffer.from(aad));
+  const ct = Buffer.concat([c.update(text, 'utf8'), c.final()]);
+  return 'enc1:' + Buffer.concat([iv, c.getAuthTag(), ct]).toString('base64');
+}
+function unseal(val, aad) {
+  if (typeof val !== 'string' || !val.startsWith('enc1:')) return val;
+  const k = dataKey();
+  if (!k) return '[Encrypted \u2014 the site\u2019s encryption key isn\u2019t set]';
+  try {
+    const raw = Buffer.from(val.slice(5), 'base64');
+    const d = crypto.createDecipheriv('aes-256-gcm', k, raw.subarray(0, 12));
+    d.setAAD(Buffer.from(aad)); d.setAuthTag(raw.subarray(12, 28));
+    return Buffer.concat([d.update(raw.subarray(28)), d.final()]).toString('utf8');
+  } catch (err) {
+    console.error('[decrypt] failed for', aad, err.message);
+    return '[Can\u2019t decrypt \u2014 the encryption key has changed]';
+  }
+}
+function transform(key, val, fn) {
+  const fields = val && typeof val === 'object' && sealedFields(key);
+  if (!fields) return val;
+  const out = { ...val };
+  for (const f of fields) if (typeof out[f] === 'string') out[f] = fn(out[f], `${key}#${f}`);
+  return out;
+}
+const get = async (key) => transform(key, await store().get(key, { type: 'json' }), unseal);
+const put = (key, val) => store().setJSON(key, transform(key, val, seal));
 const del = (key) => store().delete(key);
 const keys = async (prefix) => (await store().list({ prefix })).blobs.map((b) => b.key);
 async function listAll(prefix) {
@@ -189,7 +248,43 @@ function rateLimit(key, max, windowMs) {
 
 // ---------- One-time migration from the single-group version ----------
 let migrated = false;
+// Encrypt any plain-text prayer/discussion records once a key is configured (runs once per key)
+let encMigrated = false;
+async function migrateEncryption() {
+  if (encMigrated || !dataKey()) return;
+  const flag = `meta/enc-${keyFingerprint()}`;
+  if (await store().get(flag)) { encMigrated = true; return; }
+  let n = 0;
+  for (const k of await keys('g/')) {
+    if (!sealedFields(k)) continue;
+    const raw = await store().get(k, { type: 'json' });
+    if (!raw || !sealedFields(k).some((f) => typeof raw[f] === 'string' && raw[f] && !raw[f].startsWith('enc1:'))) continue;
+    await put(k, raw); n++;
+  }
+  await store().setJSON(flag, { at: now(), records: n });
+  console.log(`[encryption] sealed ${n} existing records`);
+  encMigrated = true;
+}
+// Older email-log entries kept full subjects (with prayer and discussion titles); rewrite them generically once
+let logScrubbed = false;
+async function scrubEmailLog() {
+  if (logScrubbed) return;
+  if (await store().get('meta/emaillog-scrub-v1')) { logScrubbed = true; return; }
+  const rules = [[/\] Prayer request: .*/, '] Prayer request'], [/\] (Update|New comment): .*/, '] Prayer request update'], [/\] New topic: .*/, '] New discussion topic'], [/\] Re: .*/, '] Discussion reply']];
+  let n = 0;
+  for (const k of await keys('g/')) {
+    if (!/\/emaillog\//.test(k)) continue;
+    const e = await store().get(k, { type: 'json' });
+    if (!e?.subject) continue;
+    const rule = rules.find(([re]) => re.test(e.subject));
+    if (rule) { await store().setJSON(k, { ...e, subject: e.subject.replace(rule[0], rule[1]) }); n++; }
+  }
+  await store().setJSON('meta/emaillog-scrub-v1', { at: now(), entries: n });
+  logScrubbed = true;
+}
 async function migrateLegacy() {
+  await migrateEncryption();
+  await scrubEmailLog();
   if (migrated) return;
   if (await get('meta/v3')) { migrated = true; return; }
   if (!(await get('meta/v2'))) await migrateV2();
@@ -281,13 +376,13 @@ async function logEmail(gid, subject, recipients, status, detail = '') {
   const at = now();
   try { await put(`g/${gid}/emaillog/${at}-${newId()}`, { subject, recipients, status, detail, at }); } catch {}
 }
-async function sendEmail({ to, subject, html, text, gid }) {
+async function sendEmail({ to, subject, html, text, gid, logAs }) {
   const recipients = Array.isArray(to) ? to : [to];
   if (!recipients.length) return;
   const key = RESEND_API_KEY();
   if (!key) {
     console.log(`[email:not-configured] "${subject}" → ${recipients.length} recipient(s)`);
-    return logEmail(gid, subject, recipients.length, 'skipped', 'RESEND_API_KEY is not set');
+    return logEmail(gid, logAs || subject, recipients.length, 'skipped', 'RESEND_API_KEY is not set');
   }
   try {
     for (let i = 0; i < recipients.length; i += 100) { // one message per person keeps addresses private
@@ -299,10 +394,10 @@ async function sendEmail({ to, subject, html, text, gid }) {
       });
       if (!r.ok) throw new Error(`Resend ${r.status}: ${(await r.text()).slice(0, 300)}`);
     }
-    await logEmail(gid, subject, recipients.length, 'sent');
+    await logEmail(gid, logAs || subject, recipients.length, 'sent');
   } catch (err) {
     console.error('[email] failed:', err.message);
-    await logEmail(gid, subject, recipients.length, 'failed', err.message);
+    await logEmail(gid, logAs || subject, recipients.length, 'failed', err.message);
   }
 }
 async function notifyGroup(type, ctx, group, subject, heading, body, ctaText, ctaUrl, text, excludeId) {
@@ -311,7 +406,9 @@ async function notifyGroup(type, ctx, group, subject, heading, body, ctaText, ct
   const to = users.filter((u) => u && u.notify !== false && userPrefs(u)[type]).map((u) => u.email);
   const html = emailShell(group.name, heading, body, ctaText, ctaUrl,
     `You're receiving this as a member of ${group.name}. You can choose which emails you get from your profile.`);
-  ctx.background(sendEmail({ to, subject: `[${group.name}] ${subject}`, html, text, gid: group.id }));
+  // Sensitive emails are logged without their subject, so prayer and discussion titles never sit in the log unencrypted
+  const SENSITIVE = { prayer: 'Prayer request', prayerComment: 'Prayer request update', topic: 'New discussion topic', topicComment: 'Discussion reply' };
+  ctx.background(sendEmail({ to, subject: `[${group.name}] ${subject}`, html, text, gid: group.id, logAs: SENSITIVE[type] ? `[${group.name}] ${SENSITIVE[type]}` : undefined }));
 }
 const deepLink = (gid, hash) => `${APP_URL()}/?g=${encodeURIComponent(gid)}#${hash}`;
 
@@ -528,7 +625,7 @@ route('POST', '/reset', async ({ body, ctx }) => {
 route('GET', '/me', async ({ req }) => {
   const u = await currentUser(req);
   if (!u) return { user: null, groups: [] };
-  return { user: userOut(u), groups: await myGroups(u) };
+  return { user: { ...userOut(u), isAdmin: isAdmin(u) }, groups: await myGroups(u) };
 });
 
 route('PATCH', '/me', async ({ req, body }) => {
@@ -764,6 +861,254 @@ route('DELETE', '/groups/:gid/prayers/:id/comments/:cid', async ({ req, params }
   if (!canModify(m, c.userId)) throw new HttpError(403, 'You can only remove your own comments.');
   await del(key);
   return { prayer: await prayerOut(m.group.id, p, await nameMap(m.group.id)) };
+});
+
+// ---------- Backups ----------
+// Snapshots copy the stored data exactly as it sits (prayer requests and discussions stay encrypted)
+// into a separate "<store>-backups" store. Sign-in sessions and reset links aren't backed up.
+const BACKUP_SKIP = /^(sessions|resets|admin)\//; // admin/ holds the Google Drive connection — never backed up or overwritten
+const KEEP = { nightly: 30, manual: 20, 'before-restore': 10, imported: 10 };
+const snapName = (reason, count) => `snap/${new Date().toISOString().replace(/[:.]/g, '-')}__${reason}__${count}.json`;
+const parseSnap = (k) => {
+  const m = /^snap\/(.+?)__([\w-]+)__(\d+)\.json$/.exec(k);
+  if (!m) return null;
+  const iso = m[1].replace(/T(\d\d)-(\d\d)-(\d\d)-(\d+)Z$/, 'T$1:$2:$3.$4Z');
+  return { key: k, at: iso, reason: m[2], records: Number(m[3]) };
+};
+async function createSnapshot(reason) {
+  const data = {};
+  for (const k of await keys('')) {
+    if (BACKUP_SKIP.test(k)) continue;
+    const raw = await store().get(k); // raw text: sealed fields stay sealed
+    if (raw !== null && raw !== undefined) data[k] = raw;
+  }
+  const count = Object.keys(data).length;
+  const name = snapName(reason, count);
+  await backupStore().set(name, JSON.stringify({ app: 'groups', version: 1, createdAt: now(), reason, store: _storeName, keyFingerprint: keyFingerprint(), count, data }));
+  await pruneSnapshots();
+  return parseSnap(name);
+}
+async function listSnapshots() {
+  const { blobs } = await backupStore().list({ prefix: 'snap/' });
+  return blobs.map((b) => parseSnap(b.key)).filter(Boolean).sort((a, b) => b.at.localeCompare(a.at));
+}
+async function pruneSnapshots() {
+  const all = await listSnapshots();
+  for (const [reason, keep] of Object.entries(KEEP)) {
+    for (const s of all.filter((x) => x.reason === reason).slice(keep)) await backupStore().delete(s.key);
+  }
+}
+function readSnapshot(text) {
+  let snap;
+  try { snap = typeof text === 'string' ? JSON.parse(text) : text; } catch { throw new HttpError(400, 'That file isn’t a valid backup.'); }
+  if (!snap || snap.app !== 'groups' || typeof snap.data !== 'object') throw new HttpError(400, 'That file isn’t a Groups backup.');
+  return snap;
+}
+// Replace the live data with a snapshot. A safety snapshot is taken first so a restore can be undone.
+async function restoreSnapshot(snap) {
+  if (snap.keyFingerprint && keyFingerprint() && snap.keyFingerprint !== keyFingerprint())
+    throw new HttpError(400, 'This backup was made with a different encryption key, so its prayer requests and discussions couldn’t be read. Restore it with the original key in place.');
+  const safety = await createSnapshot('before-restore');
+  const wanted = new Set(Object.keys(snap.data).filter((k) => !BACKUP_SKIP.test(k)));
+  for (const k of await keys('')) if (!BACKUP_SKIP.test(k) && !wanted.has(k)) await store().delete(k);
+  for (const k of wanted) await store().set(k, typeof snap.data[k] === 'string' ? snap.data[k] : JSON.stringify(snap.data[k]));
+  encMigrated = false; migrated = false; // re-check migrations against the restored data
+  return { restored: wanted.size, safety };
+}
+export async function runNightlyBackup(context) {
+  useStoreFor(context);
+  const s = await createSnapshot('nightly');
+  console.log(`[backup] nightly snapshot: ${s.records} records → ${s.key}`);
+  const text = await backupStore().get(s.key);
+  const up = await uploadToDrive(packBackupFile(text), backupFileName(JSON.parse(text)));
+  if (up) console.log(`[backup] copied to Google Drive: ${up.name}`);
+  return s;
+}
+
+// Site admins are the accounts listed in the ADMIN_EMAILS setting (comma-separated)
+const adminEmails = () => env('ADMIN_EMAILS').split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
+const isAdmin = (u) => !!u && adminEmails().includes(String(u.email).toLowerCase());
+async function requireAdmin(req) {
+  const u = await requireUser(req);
+  if (!isAdmin(u)) throw new HttpError(403, 'Only site admins can manage backups.');
+  return u;
+}
+route('GET', '/admin/backups', async ({ req }) => {
+  await requireAdmin(req);
+  return { snapshots: await listSnapshots(), encryption: { enabled: !!dataKey(), fingerprint: keyFingerprint() }, store: _storeName, drive: await driveStatus() };
+});
+route('POST', '/admin/backups', async ({ req }) => {
+  await requireAdmin(req);
+  rateLimit('backup:' + 'admin', 20, 60 * 60e3);
+  return { snapshot: await createSnapshot('manual'), snapshots: await listSnapshots() };
+});
+route('GET', '/admin/backups/download', async ({ req }) => {
+  await requireAdmin(req);
+  const key = new URL(req.url).searchParams.get('key') || '';
+  if (!parseSnap(key)) throw new HttpError(404, 'Backup not found.');
+  const text = await backupStore().get(key);
+  if (!text) throw new HttpError(404, 'Backup not found.');
+  const snap = JSON.parse(text);
+  return { name: backupFileName(snap), file: JSON.parse(packBackupFile(text)) };
+});
+route('POST', '/admin/backups/restore', async ({ req, body }) => {
+  await requireAdmin(req);
+  if (body.confirm !== 'RESTORE') throw new HttpError(400, 'Type RESTORE to confirm.');
+  let snap;
+  if (body.key) {
+    if (!parseSnap(body.key)) throw new HttpError(404, 'Backup not found.');
+    const text = await backupStore().get(body.key);
+    if (!text) throw new HttpError(404, 'Backup not found.');
+    snap = readSnapshot(text);
+  } else if (body.snapshot) {
+    snap = readSnapshot(unpackBackupFile(typeof body.snapshot === 'string' ? JSON.parse(body.snapshot) : body.snapshot));
+    await backupStore().set(snapName('imported', Object.keys(snap.data).length), JSON.stringify(snap)); // keep the uploaded copy too
+    await pruneSnapshots();
+  } else throw new HttpError(400, 'Choose a backup to restore.');
+  const r = await restoreSnapshot(snap);
+  return { ...r, snapshots: await listSnapshots() };
+});
+
+// ---------- Backup files (encrypted, compressed) ----------
+// Files that leave Netlify (downloads, Google Drive) are gzip-compressed and sealed with AES-256-GCM
+// using a key derived from DATA_ENCRYPTION_KEY, so a copy in an inbox or a Drive is unreadable on its own.
+function fileKey() {
+  const secret = env('DATA_ENCRYPTION_KEY');
+  return secret ? Buffer.from(crypto.hkdfSync('sha256', secret, 'groups-app', 'backup-file-v1', 32)) : null;
+}
+function packBackupFile(snapText) {
+  const k = fileKey(), meta = JSON.parse(snapText);
+  if (!k) return snapText; // no key configured: plain snapshot (sealed fields would be plain too)
+  const iv = crypto.randomBytes(12), c = crypto.createCipheriv('aes-256-gcm', k, iv);
+  c.setAAD(Buffer.from('groups-backup-v1'));
+  const ct = Buffer.concat([c.update(zlib.gzipSync(Buffer.from(snapText))), c.final()]);
+  return JSON.stringify({ app: 'groups', format: 'encrypted-v1', createdAt: meta.createdAt, reason: meta.reason, count: meta.count,
+    keyFingerprint: keyFingerprint(), iv: iv.toString('base64'), tag: c.getAuthTag().toString('base64'), data: ct.toString('base64') });
+}
+function unpackBackupFile(obj) {
+  if (obj?.format !== 'encrypted-v1') return obj;
+  const k = fileKey();
+  if (!k) throw new HttpError(400, 'This backup is encrypted. Set the original DATA_ENCRYPTION_KEY first, then restore it.');
+  try {
+    const d = crypto.createDecipheriv('aes-256-gcm', k, Buffer.from(obj.iv, 'base64'));
+    d.setAAD(Buffer.from('groups-backup-v1')); d.setAuthTag(Buffer.from(obj.tag, 'base64'));
+    return JSON.parse(zlib.gunzipSync(Buffer.concat([d.update(Buffer.from(obj.data, 'base64')), d.final()])).toString('utf8'));
+  } catch { throw new HttpError(400, 'This backup was encrypted with a different key, so it can’t be opened.'); }
+}
+
+// ---------- Google Drive (off-site copies) ----------
+// The admin connects their own Google account once (scope: drive.file — the app can only see files it
+// creates). The refresh token is stored sealed with the data key. Nightly backups are uploaded to a
+// "Groups Backups" folder and the newest 30 are kept.
+const GDRIVE_KEEP = 30;
+const gConfigured = () => !!(env('GOOGLE_CLIENT_ID') && env('GOOGLE_CLIENT_SECRET'));
+const gRedirect = () => `${APP_URL()}/api/admin/gdrive/callback`;
+async function gState() { return (await store().get('admin/gdrive', { type: 'json' })) || null; }
+async function gSave(st) {
+  await store().setJSON('admin/gdrive', { ...st, refresh: st.refresh && !st.refresh.startsWith('enc1:') ? seal(st.refresh, 'admin/gdrive#refresh') : st.refresh });
+}
+async function gAccessToken(st) {
+  const refresh = unseal(st.refresh, 'admin/gdrive#refresh');
+  const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ client_id: env('GOOGLE_CLIENT_ID'), client_secret: env('GOOGLE_CLIENT_SECRET'), refresh_token: refresh, grant_type: 'refresh_token' }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error === 'invalid_grant' ? 'Google access was revoked or expired — reconnect Google Drive.' : `Google sign-in failed (${j.error || r.status}).`);
+  return j.access_token;
+}
+async function gApi(token, url, opts = {}) {
+  const r = await fetch(url, { ...opts, headers: { Authorization: `Bearer ${token}`, ...(opts.headers || {}) } });
+  if (r.status === 204) return {};
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(`Google Drive error: ${j.error?.message || r.status}`);
+  return j;
+}
+async function gEnsureFolder(token, st) {
+  if (st.folderId) {
+    try { const f = await gApi(token, `https://www.googleapis.com/drive/v3/files/${st.folderId}?fields=id,trashed`); if (!f.trashed) return st.folderId; } catch {}
+  }
+  const f = await gApi(token, 'https://www.googleapis.com/drive/v3/files?fields=id', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: `${APP_NAME()} Backups`, mimeType: 'application/vnd.google-apps.folder' }) });
+  return f.id;
+}
+async function uploadToDrive(fileText, name) {
+  const st = await gState();
+  if (!st?.refresh || !gConfigured()) return null;
+  try {
+    const token = await gAccessToken(st);
+    const folderId = await gEnsureFolder(token, st);
+    const boundary = 'groups' + crypto.randomBytes(8).toString('hex');
+    const body = `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify({ name, parents: [folderId], mimeType: 'application/json' })}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${fileText}\r\n--${boundary}--`;
+    const up = await gApi(token, 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name', {
+      method: 'POST', headers: { 'Content-Type': `multipart/related; boundary=${boundary}` }, body });
+    // keep the newest backups only
+    const list = await gApi(token, `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(`'${folderId}' in parents and trashed=false`)}&orderBy=createdTime desc&fields=files(id,name)&pageSize=200`);
+    for (const f of (list.files || []).slice(GDRIVE_KEEP)) await gApi(token, `https://www.googleapis.com/drive/v3/files/${f.id}`, { method: 'DELETE' });
+    await gSave({ ...st, folderId, lastUploadAt: now(), lastFile: up.name, lastError: null, lastErrorAt: null });
+    return up;
+  } catch (err) {
+    console.error('[gdrive] upload failed:', err.message);
+    const first = !st.lastError;
+    await gSave({ ...st, lastError: err.message, lastErrorAt: now() });
+    if (first) { // tell the admins once per run of failures
+      const to = adminEmails();
+      if (to.length) await sendEmail({ to, subject: `${APP_NAME()}: Google Drive backup failed`, text: `The backup copy to Google Drive failed: ${err.message}\n\nOpen ${APP_URL()}/#backups to check the connection.`,
+        html: emailShell(APP_NAME(), 'Google Drive backup failed', `<p style="margin:0">${esc(err.message)}</p><p style="margin:8px 0 0">Backups are still being saved on Netlify. Open Site Backups to reconnect Google Drive.</p>`, 'Open Site Backups', `${APP_URL()}/#backups`, 'You’re receiving this as a site admin.') });
+    }
+    return null;
+  }
+}
+async function driveStatus() {
+  const st = await gState();
+  return { configured: gConfigured(), connected: !!st?.refresh, account: st?.account || '', folderUrl: st?.folderId ? `https://drive.google.com/drive/folders/${st.folderId}` : '',
+    lastUploadAt: st?.lastUploadAt || null, lastFile: st?.lastFile || '', lastError: st?.lastError || null, lastErrorAt: st?.lastErrorAt || null };
+}
+const backupFileName = (snap) => `${APP_NAME().toLowerCase()}-backup-${snap.createdAt.slice(0, 16).replace(/[:T]/g, '-')}.json`;
+
+route('GET', '/admin/gdrive/connect', async ({ req }) => {
+  const u = await requireAdmin(req);
+  if (!gConfigured()) throw new HttpError(400, 'Add GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Netlify first.');
+  if (!dataKey()) throw new HttpError(400, 'Set up DATA_ENCRYPTION_KEY first, so the Google connection can be stored encrypted.');
+  const state = newToken();
+  await store().setJSON(`admin/gdrive-state/${state}`, { userId: u.id, expiresAt: Date.now() + 15 * 60e3 });
+  const url = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({ client_id: env('GOOGLE_CLIENT_ID'), redirect_uri: gRedirect(), response_type: 'code',
+    scope: 'https://www.googleapis.com/auth/drive.file openid email', access_type: 'offline', prompt: 'consent', include_granted_scopes: 'true', state });
+  return { url };
+});
+route('GET', '/admin/gdrive/callback', async ({ req }) => {
+  const q = new URL(req.url).searchParams, back = (s) => ({ __redirect: `${APP_URL()}/#backups?drive=${s}` });
+  const state = q.get('state') || '';
+  const pending = /^[\w-]{20,64}$/.test(state) ? await store().get(`admin/gdrive-state/${state}`, { type: 'json' }) : null;
+  if (pending) await store().delete(`admin/gdrive-state/${state}`);
+  if (!pending || pending.expiresAt < Date.now()) return back('expired');
+  const u = await requireAdmin(req); // the same signed-in admin who started it
+  if (u.id !== pending.userId) return back('error');
+  if (q.get('error') || !q.get('code')) return back('cancelled');
+  const r = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ code: q.get('code'), client_id: env('GOOGLE_CLIENT_ID'), client_secret: env('GOOGLE_CLIENT_SECRET'), redirect_uri: gRedirect(), grant_type: 'authorization_code' }) });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok || !j.refresh_token) { console.error('[gdrive] token exchange failed', j.error); return back('error'); }
+  let account = '';
+  try { account = JSON.parse(Buffer.from(String(j.id_token).split('.')[1], 'base64url').toString()).email || ''; } catch {}
+  const prev = (await gState()) || {};
+  await gSave({ refresh: j.refresh_token, account, connectedAt: now(), connectedBy: u.id, folderId: prev.folderId || null });
+  return back('connected');
+});
+route('POST', '/admin/gdrive/disconnect', async ({ req }) => {
+  await requireAdmin(req);
+  const st = await gState();
+  if (st?.refresh) { try { await fetch('https://oauth2.googleapis.com/revoke?token=' + encodeURIComponent(unseal(st.refresh, 'admin/gdrive#refresh')), { method: 'POST' }); } catch {} }
+  await store().delete('admin/gdrive');
+  return { drive: await driveStatus() };
+});
+route('POST', '/admin/gdrive/upload', async ({ req }) => {
+  await requireAdmin(req);
+  rateLimit('gdrive-upload', 10, 60 * 60e3);
+  const s = await createSnapshot('manual');
+  const text = await backupStore().get(s.key);
+  const up = await uploadToDrive(packBackupFile(text), backupFileName(JSON.parse(text)));
+  const drive = await driveStatus();
+  if (!up) throw new HttpError(502, drive.lastError || 'Google Drive isn’t connected.');
+  return { drive, snapshots: await listSnapshots() };
 });
 
 // --- Discussion topics ---
@@ -1191,8 +1536,8 @@ route('DELETE', '/public/meal-signup/:token', async ({ params, ctx }) => {
 });
 
 // ---- Day-before reminders (run hourly by the meal-reminders scheduled function) ----
-export async function runMealReminders() {
-  _store = null;
+export async function runMealReminders(context) {
+  useStoreFor(context);
   const pending = [], ctx = { background: (p) => pending.push(p) };
   let sent = 0;
   for (const key of await keys('mtactive/')) {
@@ -1504,7 +1849,7 @@ route('DELETE', '/groups/:gid/polls/:id', async ({ req, params }) => {
 
 // ---------- Handler ----------
 export default async function handler(req, context = {}) {
-  _store = null; // fresh store (and token) for every request
+  useStoreFor(context); // fresh store (and token) for every request; previews get their own data
   const url = new URL(req.url);
   const pending = [];
   const ctx = {
@@ -1523,7 +1868,8 @@ export default async function handler(req, context = {}) {
     let body = {};
     if (req.method !== 'GET') {
       const text = await req.text();
-      if (text.length > 100_000) throw new HttpError(413, 'Request too large.');
+      const limit = url.pathname === '/api/admin/backups/restore' ? 25_000_000 : 100_000; // backup files can be large
+      if (text.length > limit) throw new HttpError(413, 'Request too large.');
       try { body = text ? JSON.parse(text) : {}; } catch { throw new HttpError(400, 'Invalid JSON.'); }
     }
     payload = await r.handler({ req, body, params: url.pathname.match(r.re).groups || {}, ctx });
@@ -1534,5 +1880,6 @@ export default async function handler(req, context = {}) {
   }
   if (pending.length) await Promise.allSettled(pending); // no waitUntil available: finish emails before responding
   if (ctx.setCookie) headers['Set-Cookie'] = ctx.setCookie;
+  if (payload && payload.__redirect) return new Response(null, { status: 302, headers: { Location: payload.__redirect, 'Cache-Control': 'no-store' } });
   return new Response(JSON.stringify(payload), { status, headers });
 }
