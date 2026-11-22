@@ -1600,8 +1600,8 @@
           </div>
           ${x.canManage ? `<div class="group-label" style="margin-top:22px">${x.isCreator ? 'You started this exchange' : 'Organizer tools'}</div>
             <div class="actions" style="margin-top:6px">
-              ${!drawn ? `<button class="btn block" data-action="gift-draw" data-id="${esc(x.id)}" ${n < 3 ? 'disabled' : ''}>Draw Names</button>
-                <p class="group-foot" style="margin:2px 4px 8px">${n < 3 ? 'At least 3 people need to join first.' : `Everyone gets a private email with who they’re buying for. You won’t see the matches unless you choose to reveal them.`}</p>` : ''}
+              ${!drawn ? `<button class="btn block" data-action="gift-draw" data-id="${esc(x.id)}" ${n < 2 ? 'disabled' : ''}>Draw Names</button>
+                <p class="group-foot" style="margin:2px 4px 8px">${n < 2 ? 'At least 2 people need to join first.' : `Everyone gets a private email with who they’re buying for. You won’t see the matches unless you choose to reveal them.`}</p>` : ''}
               ${drawn && x.isCreator ? (reveal
                 ? `<div class="group reveal-list">${reveal.map((r) => `<div class="row"><span>${esc(r.giverName)}</span><span class="v">→ ${esc(r.recipientName)}</span></div>`).join('')}</div>
                    <button class="btn tinted block" data-action="gift-hide" data-id="${esc(x.id)}">Hide Matches</button>`

@@ -1385,7 +1385,7 @@ route('POST', '/groups/:gid/gifts/:id/draw', async ({ req, params, ctx }) => {
   const x = await getGift(m, params.id);
   if (!canManageGift(m, x)) throw new HttpError(403, 'Only the person who started this exchange can draw names.');
   const parts = await listAll(gxPartPrefix(m.group.id, x.id));
-  if (parts.length < 3) throw new HttpError(400, 'At least 3 people need to join before drawing names.');
+  if (parts.length < 2) throw new HttpError(400, 'At least 2 people need to join before drawing names.');
   const redraw = x.status === 'drawn';
   await Promise.all((await keys(gxMatchPrefix(m.group.id, x.id))).map((k) => del(k)));
   const pairs = drawNames(parts.map((p) => p.userId));
