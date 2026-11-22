@@ -883,3 +883,27 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .recovery-key { display: block; font-size: 14px; padding: 10px 12px; border-radius: 10px; background: var(--fill-2); overflow-wrap: anywhere; user-select: all; }
 .key-form { gap: 8px; }
 .key-form input { flex: 1; }
+
+/* ---------- Gift exchange ---------- */
+.gift-card { display: block; width: 100%; text-align: left; border: 0; font: inherit; color: inherit; cursor: pointer; padding: 16px 18px; }
+.gc-top { display: flex; align-items: center; gap: 12px; }
+.gc-icon { flex: none; width: 40px; height: 40px; border-radius: 11px; display: grid; place-items: center; color: #fff;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--red) 80%, #fff), var(--red)); }
+.gc-icon svg { width: 22px; height: 22px; }
+.gc-main { flex: 1; min-width: 0; }
+.gc-main h3 { margin: 0 0 2px; font-size: 17px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.gc-main .sub { color: var(--label-2); font-size: 14px; }
+.gc-match { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: .5px solid var(--sep); font-size: 15px; }
+.gift-hero-icon { background: linear-gradient(180deg, color-mix(in srgb, var(--red) 80%, #fff), var(--red)); }
+.gift-match { margin-top: 16px; padding: 16px 18px; background: linear-gradient(135deg, color-mix(in srgb, var(--red) 14%, var(--bg-elev)), color-mix(in srgb, var(--green) 12%, var(--bg-elev))); }
+.gm-head { display: flex; align-items: center; gap: 12px; }
+.gm-head small { display: block; font-size: 13px; color: var(--label-2); }
+.gm-head b { font-size: 22px; letter-spacing: -.01em; }
+.gm-note { margin: 10px 0 0; font-size: 14px; color: var(--label-2); }
+.group.gift-kv .row { display: block; padding-top: 10px; padding-bottom: 10px; min-height: 0; }
+.group.gift-kv .row > span:first-child { display: block; font-size: 13px; color: var(--label-2); margin-bottom: 2px; }
+.group.gift-kv .row .v { display: block; text-align: left; color: var(--label); white-space: pre-line; overflow-wrap: anywhere; max-width: none; font-size: 16px; }
+.gp-label { font-size: 13px; color: var(--label-2); margin-bottom: 4px; display: block; }
+.row.stack textarea[id^="gp-"] { min-height: 64px; }
+.reveal-list { margin-bottom: 8px; }
+.reveal-list .row .v { font-weight: 600; }

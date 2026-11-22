@@ -89,3 +89,7 @@ pick a date range, which weekdays need a meal, a drop-off window, food notes and
 - **Security:** passwords are hashed with scrypt, sessions use HttpOnly cookies that last 60 days, and everything is served over HTTPS on Netlify.
 - **Time zones:** dates and times are stored as entered ("7:00 PM on Nov 20"). They aren't converted between time zones, which is what a local group usually wants.
 - **Local development:** `npm install`, then `netlify dev`. It opens at http://localhost:8888.
+
+## Gift exchange
+
+Off by default — turn it on in Group Info → Features. Anyone in the group can start an exchange (name, budget, description). Members join and fill in a gift profile (favorites, sizes, likes/dislikes, stocking stuffers, wishlist). The creator (or an organizer) draws names once at least 3 people have joined; each person gets a private email with their match and that person's profile, and sees the same thing in the app. Matches are never shown to the creator unless they choose **Reveal All Matches**. Gift profiles and matches are encrypted at rest.

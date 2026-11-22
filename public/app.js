@@ -95,10 +95,10 @@
   const canModify = (ownerId) => S.me && (isOrganizer() || S.me.id === ownerId);
   const feat = (f) => { const g = curGroup(); return !!(g && (g.features || { members: true, prayer: false })[f]); };
   // Members tab stays visible to organizers even when hidden from everyone else
-  const showTab = (k) => k === 'prayer' ? feat('prayer') : k === 'meals' ? feat('meals') : k === 'topics' ? feat('topics') : k === 'members' ? feat('members') || isOrganizer() : true;
+  const showTab = (k) => k === 'prayer' ? feat('prayer') : k === 'meals' ? feat('meals') : k === 'topics' ? feat('topics') : k === 'gifts' ? feat('gifts') : k === 'members' ? feat('members') || isOrganizer() : true;
   const unreadTopics = () => (S.topics || []).filter((t) => t.unread).length;
   const tabBadge = (k) => { const n = k === 'polls' ? pendingCount() : k === 'topics' ? unreadTopics() : 0; return n ? `<span class="badge">${n}</span>` : ''; };
-  const tabList = () => [['calendar', 'Calendar', I.cal], ['polls', 'Polls', I.poll], ['prayer', 'Prayer', I.pray], ['meals', 'Meals', I.meal], ['topics', 'Topics', I.chat], ['members', 'Members', I.people]].filter(([k]) => showTab(k));
+  const tabList = () => [['calendar', 'Calendar', I.cal], ['polls', 'Polls', I.poll], ['prayer', 'Prayer', I.pray], ['meals', 'Meals', I.meal], ['topics', 'Topics', I.chat], ['gifts', 'Gifts', I.gift], ['members', 'Members', I.people]].filter(([k]) => showTab(k));
   const gp = (path = '') => `/groups/${encodeURIComponent(S.gid)}${path}`;
   const store = {
     get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -135,6 +135,7 @@
     share: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3M8 7l4-4 4 4"/><path d="M5 12v7a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-7"/></svg>',
     list: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6h11M9 12h11M9 18h11"/><circle cx="4.5" cy="6" r="1.2"/><circle cx="4.5" cy="12" r="1.2"/><circle cx="4.5" cy="18" r="1.2"/></svg>',
     eye: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3l18 18"/><path d="M10.6 5.1A10.4 10.4 0 0 1 12 5c6 0 9.5 7 9.5 7a17 17 0 0 1-2.6 3.5M6.6 6.6C3.9 8.4 2.5 12 2.5 12s3.5 7 9.5 7a9.6 9.6 0 0 0 4.4-1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/></svg>',
+    gift: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="8.5" width="17" height="4" rx="1"/><path d="M5 12.5v7a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-7M12 8.5v12"/><path d="M12 8.5S10.8 4 8.2 4a2.2 2.2 0 0 0 0 4.5H12zM12 8.5S13.2 4 15.8 4a2.2 2.2 0 0 1 0 4.5H12z"/></svg>',
     chat: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h8A2.5 2.5 0 0 1 17 5.5v5a2.5 2.5 0 0 1-2.5 2.5H9l-4 3v-3.2A2.5 2.5 0 0 1 4 10.5z"/><path d="M20 9v6.5a2.5 2.5 0 0 1-1 2V21l-3.3-2.5H11"/></svg>',
     pray: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20.5s-7.5-4.4-7.5-10A4.3 4.3 0 0 1 12 7.6a4.3 4.3 0 0 1 7.5 2.9c0 5.6-7.5 10-7.5 10z"/></svg>',
     key: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4"/><path d="M11 12l9-9M16 7l3 3M14 9l2 2"/></svg>',
@@ -183,12 +184,13 @@
   async function loadAll() {
     if (!S.gid) return;
     const gid = S.gid;
-    const [e, p, m, pr, mt, tp] = await Promise.all([api('GET', gp('/events')), api('GET', gp('/polls')), api('GET', gp('/members')),
+    const [e, p, m, pr, mt, tp, gx] = await Promise.all([api('GET', gp('/events')), api('GET', gp('/polls')), api('GET', gp('/members')),
       feat('prayer') ? api('GET', gp('/prayers')) : Promise.resolve({ prayers: [] }),
       feat('meals') ? api('GET', gp('/meals')) : Promise.resolve({ trains: [] }),
-      feat('topics') ? api('GET', gp('/topics')) : Promise.resolve({ topics: [] })]);
+      feat('topics') ? api('GET', gp('/topics')) : Promise.resolve({ topics: [] }),
+      feat('gifts') ? api('GET', gp('/gifts')) : Promise.resolve({ exchanges: [], fields: S.giftFields || [] })]);
     if (gid !== S.gid) return; // switched groups mid-load
-    S.events = e.events; S.polls = p.polls; S.members = m.members; S.prayers = pr.prayers; S.trains = mt.trains; S.topics = tp.topics; S.loaded = true;
+    S.events = e.events; S.polls = p.polls; S.members = m.members; S.prayers = pr.prayers; S.trains = mt.trains; S.topics = tp.topics; S.gifts = gx.exchanges; if (gx.fields?.length) S.giftFields = gx.fields; S.loaded = true;
   }
   const eventsOn = (d) => S.events.filter((e) => e.date === d);
   const pendingPolls = () => S.polls.filter((p) => p.status === 'open' && !p.responded);
@@ -202,7 +204,8 @@
     const [view, arg] = location.hash.replace(/^#\/?/, '').split('/');
     if (view === 'reset' && arg) { S.resetToken = arg; S.authMode = 'reset'; return; }
     if (view && view.startsWith('backups')) { S.pendingBackups = (view.split('drive=')[1] || 'open'); return; }
-    if (['calendar', 'polls', 'members', 'prayer', 'meals', 'topics'].includes(view)) S.view = view;
+    if (['calendar', 'polls', 'members', 'prayer', 'meals', 'topics', 'gifts'].includes(view)) S.view = view;
+    if (view === 'gifts' && arg) S.pendingGift = arg;
     if (view === 'topics' && arg) S.pendingTopic = arg;
     if (view === 'topics' && !arg) { S.topicOpen = null; S.editPost = null; }
     if (view === 'meals' && arg) S.pendingTrain = arg;
@@ -300,6 +303,7 @@
     else if (S.view === 'prayer') body = renderPrayer();
     else if (S.view === 'meals') body = renderMeals();
     else if (S.view === 'topics') body = renderTopics();
+    else if (S.view === 'gifts') body = renderGifts();
     else body = renderMembers();
     $app.innerHTML = `
       <header class="topbar">
@@ -345,6 +349,7 @@
     if (showTab('prayer')) steps.push({ el: () => tabEl('prayer'), view: 'prayer', title: 'Prayer Requests', text: 'Share a request with the group, and post updates as things change. Everyone can comment to offer encouragement.' });
     if (showTab('meals')) steps.push({ el: () => tabEl('meals'), view: 'meals', title: 'Meal Trains', text: 'When a family needs support, start a meal train and share its link. Anyone can sign up for a day — even without an account — and gets the address, allergy notes and a reminder by email.' });
     if (showTab('topics')) steps.push({ el: () => tabEl('topics'), view: 'topics', title: 'Discussions', text: 'A forum for the group. Start a topic and reply in the thread. Topics with something new sit under <b>Unread</b>, and you can read replies oldest or newest first.' });
+    if (showTab('gifts')) steps.push({ el: () => tabEl('gifts'), view: 'gifts', title: 'Gift Exchange', text: 'Join a gift exchange and fill in your wish list, sizes and favorites. When names are drawn, you\u2019ll get an email \u2014 and see here \u2014 who you\u2019re buying for, with everything they shared.' });
     if (showTab('members')) steps.push({ el: () => tabEl('members'), view: 'members', title: 'Members', text: `See who’s in the group and tap anyone to call, text or email them.${feat('members') ? '' : ' (This tab is hidden from regular members right now.)'}` });
     steps.push(
       { el: () => document.querySelector('.avatar-btn'), title: 'Your profile', text: 'Add your mobile number, choose exactly which emails you get, switch between light and dark mode, or sign out. You can replay this tour from here anytime.' },
@@ -828,6 +833,38 @@
     if (i >= 0) S.topics[i] = summary; else S.topics.unshift(summary);
   }
 
+  // ---------- Gift exchange ----------
+  const GIFT_SECTIONS = [['Favorites', ['snacks', 'stores', 'restaurants', 'colors']], ['Clothing sizes', ['top', 'bottom', 'shoes']], ['About me', ['hobbies', 'likes', 'dislikes']], ['Gift ideas', ['stocking', 'wishlist']]];
+  const giftLabel = (k) => ({ snacks: 'Favorite snacks/drinks', stores: 'Favorite stores', restaurants: 'Favorite restaurants', colors: 'Favorite colors', top: 'Top', bottom: 'Bottom', shoes: 'Shoes', hobbies: 'Hobbies', likes: 'Things I like', dislikes: 'Things I do not like', stocking: 'Stocking stuffers', wishlist: 'Wishlist' }[k]);
+  const giftBudget = (x) => (x.budget === null || x.budget === undefined ? '' : fmtCost(x.budget));
+  function renderGifts() {
+    const list = S.gifts || [];
+    const card = (x) => {
+      const pill = x.status === 'drawn' ? (x.joined ? '<span class="pill green">Names drawn</span>' : '<span class="pill">Names drawn</span>')
+        : x.joined ? '<span class="pill blue">You’re in</span>' : '<span class="pill orange">Join</span>';
+      return `<button class="card gift-card" data-action="open-gift" data-id="${esc(x.id)}">
+        <div class="gc-top"><span class="gc-icon">${I.gift}</span><div class="gc-main"><h3>${esc(x.name)}</h3><div class="sub">${giftBudget(x) ? `Budget ${esc(giftBudget(x))} · ` : ''}${x.participants.length} ${x.participants.length === 1 ? 'person' : 'people'}</div></div>${pill}</div>
+        ${x.match ? `<div class="gc-match">${avatar(x.match.userId, x.match.name, 'xs')}<span>You’re buying for <b>${esc(x.match.name)}</b></span></div>` : ''}
+      </button>`;
+    };
+    return `
+      <div class="title-row">
+        <div><h1 class="large-title">Gifts</h1><div class="sub">Gift exchanges and wish lists.</div></div>
+        <button class="btn sm" data-action="new-gift">${I.plus.replace('<svg', '<svg width="16" height="16"')} New Exchange</button>
+      </div>
+      <div style="max-width:720px">
+        ${list.length ? `<div class="train-list">${list.map(card).join('')}</div>`
+          : `<div class="empty">${I.gift}<div>No gift exchanges yet.</div><div class="small" style="margin-top:4px">Start one, everyone joins and fills in their wish list, then draw names.</div>
+              <button class="btn sm" style="margin-top:14px" data-action="new-gift">New Exchange</button></div>`}
+      </div>`;
+  }
+  function giftDetailsBlock(d, emptyText) {
+    const sections = GIFT_SECTIONS.map(([title, keys]) => [title, keys.filter((k) => d?.[k])]).filter(([, ks]) => ks.length);
+    if (!sections.length) return `<div class="group"><div class="row"><span class="muted small">${esc(emptyText)}</span></div></div>`;
+    return sections.map(([title, ks]) => `<div class="group-label" style="margin-top:18px">${esc(title)}</div>
+      <div class="group kv gift-kv">${ks.map((k) => `<div class="row"><span>${esc(giftLabel(k))}</span><span class="v">${esc(d[k])}</span></div>`).join('')}</div>`).join('');
+  }
+
   // ---------- Onboarding (no groups yet) ----------
   function renderOnboarding() {
     closeSheet(true);
@@ -909,7 +946,7 @@
   async function switchGroup(gid) {
     closeMenu(); closeSheet(true);
     S.gid = gid; store.set('sg_group', gid);
-    S.loaded = false; S.events = []; S.polls = []; S.members = []; S.trains = []; S.prayers = []; S.topics = []; S.topicDetail = {}; S.topicOpen = null;
+    S.loaded = false; S.events = []; S.polls = []; S.members = []; S.trains = []; S.prayers = []; S.topics = []; S.topicDetail = {}; S.topicOpen = null; S.gifts = [];
     render();
     await loadAll();
     render();
@@ -980,7 +1017,7 @@
   }
   function refreshSheet() {
     const sheet = $sheetRoot.querySelector('.sheet');
-    if (!sheet || !S.sheet || ['event-form', 'poll-form', 'group-new', 'group-join', 'group-edit', 'profile', 'prayer-form', 'meal-form', 'meal-signup', 'topic-form'].includes(S.sheet.kind)) return;
+    if (!sheet || !S.sheet || ['event-form', 'poll-form', 'group-new', 'group-join', 'group-edit', 'profile', 'prayer-form', 'meal-form', 'meal-signup', 'topic-form', 'gift-form', 'gift-profile'].includes(S.sheet.kind)) return;
     const body = sheet.querySelector('.sheet-body'), top = body ? body.scrollTop : 0;
     const html = sheetHtml();
     if (!html) return closeSheet();
@@ -995,6 +1032,8 @@
     if (S.view === 'polls' && /^#polls\/./.test(location.hash)) history.replaceState(null, '', '#polls');
     if (S.view === 'prayer' && /^#prayer\/./.test(location.hash)) history.replaceState(null, '', '#prayer');
     if (S.view === 'meals' && /^#meals\/./.test(location.hash)) history.replaceState(null, '', '#meals');
+    if (S.view === 'gifts' && /^#gifts\/./.test(location.hash)) history.replaceState(null, '', '#gifts');
+    S.giftReveal = null;
 
     if (!bd) return;
     if (instant) { $sheetRoot.innerHTML = ''; return; }
@@ -1238,6 +1277,7 @@
             ${sw('prayer', 'Prayer Requests', 'Members share requests and post comments and updates')}
             ${sw('meals', 'Meal Trains', 'Organize meals for a family, with a sign-up link anyone can use')}
             ${sw('topics', 'Discussions', 'Start topics and talk them through with comments')}
+            ${sw('gifts', 'Gift Exchange', 'Draw names for a gift swap, with everyone\u2019s wish list')}
           </div>
           <p class="group-foot">Changes apply to everyone in ${esc(g.name)} right away. When the Members tab is off, organizers still see it and member contact info is hidden from everyone else. Turning off Prayer Requests hides them but keeps them, so they come back if you turn it on again.</p>
         </div>`;
@@ -1262,6 +1302,9 @@
           </div>
           <div class="group-label" style="margin-top:22px">Meal Trains</div>
           <div class="group">${sw('meal', 'New meal trains', 'When someone starts a meal train')}</div>
+          <div class="group-label" style="margin-top:22px">Gift Exchange</div>
+          <div class="group">${sw('gift', 'New gift exchanges', 'When someone starts a gift exchange')}</div>
+          <p class="group-foot">Name-drawing emails always go to the people in the exchange.</p>
           <div class="group-label" style="margin-top:22px">Discussions</div>
           <div class="group">
             ${sw('topic', 'New topics', 'When someone starts a discussion')}
@@ -1486,6 +1529,90 @@
           <div id="sheet-msg"></div>
         </div></form>`;
     }
+    if (s.kind === 'gift-form') {
+      const x = s.id ? (S.gifts || []).find((y) => y.id === s.id) : { name: '', budget: null, description: '' };
+      if (!x) return '';
+      return `<form autocomplete="off" novalidate>${head(s.id ? 'Edit Exchange' : 'New Gift Exchange', 'Cancel', s.id ? 'Save' : 'Create')}
+        <div class="sheet-body">
+          <div class="group">
+            <div class="row"><input name="name" placeholder="Name (e.g. Christmas Secret Santa)" maxlength="120" value="${esc(x.name)}" aria-label="Name" required></div>
+            <div class="row"><label for="gx-budget">Budget</label><span class="prefix">$</span><input id="gx-budget" name="budget" inputmode="decimal" placeholder="25" value="${esc(x.budget ?? '')}"></div>
+            <div class="row stack"><textarea name="description" placeholder="Description — when you’ll swap gifts, any rules or themes" maxlength="4000" aria-label="Description">${esc(x.description)}</textarea></div>
+          </div>
+          <p class="group-foot">${s.id ? '' : 'Everyone in the group can join and fill in their gift profile. When enough people have joined, you draw names and each person gets an email with who they’re buying for.'}</p>
+          <div id="sheet-msg"></div>
+        </div></form>`;
+    }
+    if (s.kind === 'gift-profile') {
+      const x = (S.gifts || []).find((y) => y.id === s.id);
+      if (!x) return '';
+      // start from this exchange's answers, or the newest profile from another exchange
+      const prev = x.myDetails || (S.gifts || []).filter((y) => y.myDetails).map((y) => y.myDetails)[0] || {};
+      const fld = (k, ph, area) => area
+        ? `<div class="row stack"><label class="gp-label" for="gp-${k}">${esc(giftLabel(k))}</label><textarea id="gp-${k}" name="${k}" placeholder="${esc(ph)}" maxlength="${k === 'wishlist' ? 3000 : 600}">${esc(prev[k] || '')}</textarea></div>`
+        : `<div class="row"><label for="gp-${k}">${esc(giftLabel(k))}</label><input id="gp-${k}" name="${k}" placeholder="${esc(ph)}" maxlength="600" value="${esc(prev[k] || '')}"></div>`;
+      return `<form autocomplete="off" novalidate>${head(x.joined ? 'My Gift Profile' : 'Join Exchange', 'Cancel', x.joined ? 'Save' : 'Join')}
+        <div class="sheet-body">
+          <p class="group-foot" style="margin-top:0">Only the person who draws your name sees this. Fill in what you like — everything is optional.${!x.myDetails && prev.wishlist !== undefined ? ' We filled in your answers from another exchange.' : ''}</p>
+          <div class="group-label" style="margin-top:14px">Favorites</div>
+          <div class="group">
+            ${fld('snacks', 'Snacks, drinks, treats', true)}
+            ${fld('stores', 'Where you like to shop', true)}
+            ${fld('restaurants', 'Places you love to eat', true)}
+            ${fld('colors', 'Colors you love')}
+          </div>
+          <div class="group-label" style="margin-top:22px">Clothing sizes</div>
+          <div class="group">${fld('top', 'e.g. M')}${fld('bottom', 'e.g. 32x30')}${fld('shoes', 'e.g. 10')}</div>
+          <div class="group-label" style="margin-top:22px">About me</div>
+          <div class="group">${fld('hobbies', 'What you do for fun', true)}${fld('likes', 'Things you enjoy', true)}${fld('dislikes', 'Allergies, things to avoid', true)}</div>
+          <div class="group-label" style="margin-top:22px">Gift ideas</div>
+          <div class="group">${fld('stocking', 'Small things you’d love', true)}${fld('wishlist', 'Specific items or links — one per line', true)}</div>
+          ${x.joined && x.status === 'open' ? `<div class="group" style="margin-top:22px"><div class="row danger-row" data-action="leave-gift" data-id="${esc(x.id)}" role="button" tabindex="0">Leave This Exchange</div></div>` : ''}
+          <div id="sheet-msg"></div>
+        </div></form>`;
+    }
+    if (s.kind === 'gift') {
+      const x = (S.gifts || []).find((y) => y.id === s.id);
+      if (!x) return '';
+      const drawn = x.status === 'drawn', n = x.participants.length;
+      const reveal = S.giftReveal && S.giftReveal.id === x.id ? S.giftReveal.matches : null;
+      return `${head('Gift Exchange', 'Done')}
+        <div class="sheet-body">
+          <div class="detail-hero">
+            <div class="mt-icon gift-hero-icon">${I.gift}</div>
+            <h2 style="margin-top:12px">${esc(x.name)}</h2>
+            <div class="w">${giftBudget(x) ? `Budget ${esc(giftBudget(x))} · ` : ''}${drawn ? `Names drawn ${esc(fmtStamp(x.drawnAt))}` : 'Open for sign-ups'}</div>
+          </div>
+          ${x.description ? `<div class="group"><div class="detail-desc">${esc(x.description)}</div></div>` : ''}
+          ${x.match ? `<div class="card gift-match">
+              <div class="gm-head">${avatar(x.match.userId, x.match.name)}<div><small>You’re buying for</small><b>${esc(x.match.name)}</b></div></div>
+              <p class="gm-note">Keep it a secret!${giftBudget(x) ? ` Budget: ${esc(giftBudget(x))}.` : ''}</p>
+            </div>
+            ${giftDetailsBlock(x.match.details, `${x.match.name.split(' ')[0]} hasn’t filled in their gift profile yet. Check back later.`)}`
+          : drawn && !x.joined ? '<div class="notice card" style="margin-top:16px"><div>Names have been drawn. You weren’t part of this exchange.</div></div>' : ''}
+          ${x.joined ? `<div class="group" style="margin-top:22px"><div class="row button-row" data-action="gift-profile" data-id="${esc(x.id)}" role="button" tabindex="0">${I.gift.replace('<svg', '<svg width="18" height="18"')} My Gift Profile<span class="chev">${I.right.replace('<svg', '<svg width="14" height="14"')}</span></div></div>`
+            : !drawn ? `<div class="actions" style="margin-top:18px"><button class="btn block" data-action="gift-profile" data-id="${esc(x.id)}">Join &amp; Fill In My Profile</button></div>` : ''}
+          <div class="group-label" style="margin-top:22px">${n} ${n === 1 ? 'person' : 'people'} in this exchange</div>
+          <div class="group people">
+            ${n ? x.participants.map((p) => `<div class="person">${avatar(p.userId, p.name)}<div class="nm">${esc(p.name)}${p.userId === S.me.id ? ' <span class="muted">(you)</span>' : ''}<small>${p.filled ? `${p.filled} of 12 details filled in` : 'Profile not filled in yet'}</small></div>
+              ${x.canManage && !drawn && p.userId !== S.me.id ? `<button class="link-btn danger" data-action="gift-remove" data-id="${esc(x.id)}" data-uid="${esc(p.userId)}">Remove</button>` : ''}</div>`).join('')
+              : '<div class="person"><div class="nm muted">Nobody has joined yet.</div></div>'}
+          </div>
+          ${x.canManage ? `<div class="group-label" style="margin-top:22px">${x.isCreator ? 'You started this exchange' : 'Organizer tools'}</div>
+            <div class="actions" style="margin-top:6px">
+              ${!drawn ? `<button class="btn block" data-action="gift-draw" data-id="${esc(x.id)}" ${n < 3 ? 'disabled' : ''}>Draw Names</button>
+                <p class="group-foot" style="margin:2px 4px 8px">${n < 3 ? 'At least 3 people need to join first.' : `Everyone gets a private email with who they’re buying for. You won’t see the matches unless you choose to reveal them.`}</p>` : ''}
+              ${drawn && x.isCreator ? (reveal
+                ? `<div class="group reveal-list">${reveal.map((r) => `<div class="row"><span>${esc(r.giverName)}</span><span class="v">→ ${esc(r.recipientName)}</span></div>`).join('')}</div>
+                   <button class="btn tinted block" data-action="gift-hide" data-id="${esc(x.id)}">Hide Matches</button>`
+                : `<button class="btn tinted block" data-action="gift-reveal" data-id="${esc(x.id)}">Reveal All Matches</button>`) : ''}
+              ${drawn ? `<button class="btn tinted block" data-action="gift-redraw" data-id="${esc(x.id)}">Re-draw Names</button>
+                <button class="btn tinted block" data-action="gift-reopen" data-id="${esc(x.id)}">Re-open Sign-ups</button>` : ''}
+              <button class="btn tinted block" data-action="edit-gift" data-id="${esc(x.id)}">Edit Exchange</button>
+              <button class="btn danger block" data-action="delete-gift" data-id="${esc(x.id)}">Delete Exchange</button>
+            </div>` : ''}
+        </div>`;
+    }
     if (s.kind === 'member') {
       const m = S.members.find((x) => x.id === s.id);
       if (!m) return '';
@@ -1538,7 +1665,8 @@
             ${[['event', 'New events'], ['scheduled', 'Poll results', 'When a poll\u2019s final date is scheduled'], ['poll', 'New polls'],
               ...(S.groups.some((g) => g.features?.prayer) ? [['prayer', 'New prayer requests'], ['prayerComment', 'Prayer comments & updates']] : []),
               ...(S.groups.some((g) => g.features?.meals) ? [['meal', 'New meal trains']] : []),
-              ...(S.groups.some((g) => g.features?.topics !== false) ? [['topic', 'New discussion topics'], ['topicComment', 'Discussion replies']] : [])]
+              ...(S.groups.some((g) => g.features?.topics !== false) ? [['topic', 'New discussion topics'], ['topicComment', 'Discussion replies']] : []),
+              ...(S.groups.some((g) => g.features?.gifts) ? [['gift', 'New gift exchanges']] : [])]
               .map(([k, label, sub]) => `<div class="row"><span>${esc(label)}${sub ? `<small class="row-sub">${sub}</small>` : ''}</span><label class="switch"><input type="checkbox" data-action="toggle-pref" data-key="${k}" ${(m.notifyPrefs || {})[k] !== false ? 'checked' : ''} ${m.notify ? '' : 'disabled'}><span></span></label></div>`).join('')}
           </div>
           <p class="group-foot">Choose which emails you get. Group organizers can also turn some emails off for everyone in a group.</p>
@@ -1552,6 +1680,11 @@
     return '';
   }
 
+  function upsertGift(x) {
+    S.gifts = S.gifts || [];
+    const i = S.gifts.findIndex((y) => y.id === x.id);
+    if (i >= 0) S.gifts[i] = x; else S.gifts.unshift(x);
+  }
   function upsertTrain(t) {
     S.trains = S.trains || [];
     const i = S.trains.findIndex((x) => x.id === t.id);
@@ -1623,6 +1756,19 @@
         const r = await api('POST', '/admin/backups/restore', s.key ? { key: s.key, confirm: 'RESTORE' } : { snapshot: s.snapshot, confirm: 'RESTORE' });
         toast(`Restored ${r.restored} records · Reloading\u2026`);
         setTimeout(() => location.reload(), 900);
+      } else if (s.kind === 'gift-form') {
+        if (!v.name.trim()) { btn.disabled = false; return err('Give the exchange a name.'); }
+        const body = { name: v.name, budget: v.budget, description: v.description };
+        const r = s.id ? await api('PUT', gp(`/gifts/${s.id}`), body) : await api('POST', gp('/gifts'), body);
+        upsertGift(r.exchange); S.view = 'gifts'; render();
+        openSheet('gift', { id: r.exchange.id }); history.replaceState(null, '', '#gifts/' + r.exchange.id);
+        toast(s.id ? 'Exchange updated' : 'Gift exchange created');
+      } else if (s.kind === 'gift-profile') {
+        const wasIn = (S.gifts || []).find((y) => y.id === s.id)?.joined;
+        const body = Object.fromEntries(['snacks', 'stores', 'restaurants', 'colors', 'top', 'bottom', 'shoes', 'hobbies', 'likes', 'dislikes', 'stocking', 'wishlist'].map((k) => [k, v[k] || '']));
+        const r = await api('PUT', gp(`/gifts/${s.id}/me`), body);
+        upsertGift(r.exchange); render(); openSheet('gift', { id: s.id });
+        toast(wasIn ? 'Gift profile saved' : 'You\u2019re in! Your profile is saved');
       } else if (s.kind === 'topic-form') {
         if (!v.title.trim()) { btn.disabled = false; return err('Please give the topic a title.'); }
         const r = s.id ? await api('PUT', gp(`/topics/${s.id}`), { title: v.title, body: v.body }) : await api('POST', gp('/topics'), { title: v.title, body: v.body });
@@ -2046,6 +2192,51 @@
     },
     'group-features': () => openSheet('group-features'),
     'new-train': () => openSheet('meal-form'),
+    'new-gift': () => openSheet('gift-form'),
+    'open-gift': (el) => { openSheet('gift', { id: el.dataset.id }); history.replaceState(null, '', '#gifts/' + el.dataset.id); },
+    'edit-gift': (el) => openSheet('gift-form', { id: el.dataset.id }),
+    'gift-profile': (el) => openSheet('gift-profile', { id: el.dataset.id }),
+    'leave-gift': async (el) => {
+      if (!(await ask({ title: 'Leave this exchange?', message: 'Your gift profile for this exchange will be removed.', ok: 'Leave', destructive: true }))) return;
+      try { const r = await api('DELETE', gp(`/gifts/${el.dataset.id}/me`)); upsertGift(r.exchange); render(); openSheet('gift', { id: el.dataset.id }); toast('You left the exchange'); }
+      catch (ex) { toast(ex.message); }
+    },
+    'gift-remove': async (el) => {
+      const x = S.gifts.find((y) => y.id === el.dataset.id), p = x.participants.find((q) => q.userId === el.dataset.uid);
+      if (!(await ask({ title: `Remove ${p.name}?`, message: 'They\u2019ll be taken out of this exchange and their gift profile for it removed.', ok: 'Remove', destructive: true }))) return;
+      try { const r = await api('DELETE', gp(`/gifts/${x.id}/participants/${p.userId}`)); upsertGift(r.exchange); refreshSheet(); render(); }
+      catch (ex) { toast(ex.message); }
+    },
+    'gift-draw': async (el) => {
+      const x = S.gifts.find((y) => y.id === el.dataset.id);
+      if (!(await ask({ title: 'Draw names?', message: `${x.participants.length} people will each get a private email with who they\u2019re buying for. New people can\u2019t join after this.`, ok: 'Draw Names' }))) return;
+      el.disabled = true; el.textContent = 'Drawing\u2026';
+      try { const r = await api('POST', gp(`/gifts/${x.id}/draw`), {}); upsertGift(r.exchange); refreshSheet(); render(); toast('Names drawn \u2014 everyone\u2019s been emailed'); }
+      catch (ex) { toast(ex.message); el.disabled = false; el.textContent = 'Draw Names'; }
+    },
+    'gift-redraw': async (el) => {
+      const x = S.gifts.find((y) => y.id === el.dataset.id);
+      if (!(await ask({ title: 'Re-draw names?', message: 'Everyone gets a new match and a new email. Their current matches will no longer count.', ok: 'Re-draw', destructive: true }))) return;
+      try { S.giftReveal = null; const r = await api('POST', gp(`/gifts/${x.id}/draw`), {}); upsertGift(r.exchange); refreshSheet(); render(); toast('Names re-drawn \u2014 everyone\u2019s been emailed'); }
+      catch (ex) { toast(ex.message); }
+    },
+    'gift-reopen': async (el) => {
+      if (!(await ask({ title: 'Re-open sign-ups?', message: 'This clears the current drawing so people can join or leave. You\u2019ll need to draw names again, and everyone will get a new email.', ok: 'Re-open', destructive: true }))) return;
+      try { S.giftReveal = null; const r = await api('POST', gp(`/gifts/${el.dataset.id}/reopen`), {}); upsertGift(r.exchange); refreshSheet(); render(); toast('Sign-ups re-opened'); }
+      catch (ex) { toast(ex.message); }
+    },
+    'gift-reveal': async (el) => {
+      if (!(await ask({ title: 'Reveal all matches?', message: 'You\u2019ll see who everyone is buying for \u2014 including who has you.', ok: 'Reveal' }))) return;
+      try { const r = await api('POST', gp(`/gifts/${el.dataset.id}/reveal`), {}); S.giftReveal = { id: el.dataset.id, matches: r.matches }; refreshSheet(); }
+      catch (ex) { toast(ex.message); }
+    },
+    'gift-hide': () => { S.giftReveal = null; refreshSheet(); },
+    'delete-gift': async (el) => {
+      const x = S.gifts.find((y) => y.id === el.dataset.id);
+      if (!(await ask({ title: `Delete \u201c${x.name}\u201d?`, message: 'Everyone\u2019s gift profiles and matches for this exchange will be deleted.', ok: 'Delete', destructive: true }))) return;
+      try { await api('DELETE', gp(`/gifts/${x.id}`)); S.gifts = S.gifts.filter((y) => y.id !== x.id); closeSheet(); render(); toast('Exchange deleted'); }
+      catch (ex) { toast(ex.message); }
+    },
     'new-topic': () => openSheet('topic-form'),
     'open-topic': (el, ev) => { ev?.preventDefault?.(); openTopic(el.dataset.id); },
     'topics-back': () => closeTopic(),
@@ -2301,6 +2492,7 @@
     else if (S.pendingPrayer) { const id = S.pendingPrayer; S.pendingPrayer = null; render(); if ((S.prayers || []).some((p) => p.id === id)) openSheet('prayer', { id }); }
     else if (S.pendingTrain) { const id = S.pendingTrain; S.pendingTrain = null; render(); if ((S.trains || []).some((t) => t.id === id)) openSheet('meal', { id }); }
     else if (S.pendingTopic) { const id = S.pendingTopic; S.pendingTopic = null; render(); if ((S.topics || []).some((t) => t.id === id)) openTopic(id); }
+    else if (S.pendingGift) { const id = S.pendingGift; S.pendingGift = null; render(); if ((S.gifts || []).some((x) => x.id === id)) openSheet('gift', { id }); }
     else render();
   });
 
@@ -2309,7 +2501,7 @@
     if (!S.me || document.hidden) return;
     if (TOUR) return;
     if (!S.groups.length) return; // join/create screen: never redraw it, or it wipes what someone is typing
-    if (S.sheet && ['event-form', 'poll-form', 'profile', 'group-new', 'group-join', 'group-edit', 'prayer-form', 'meal-form', 'meal-signup', 'topic-form'].includes(S.sheet.kind)) return;
+    if (S.sheet && ['event-form', 'poll-form', 'profile', 'group-new', 'group-join', 'group-edit', 'prayer-form', 'meal-form', 'meal-signup', 'topic-form', 'gift-form', 'gift-profile'].includes(S.sheet.kind)) return;
     if (S.sheet?.editComment) return;
     if (S.view === 'topics' && S.topicOpen && threadBusy()) return;
     const typing = document.querySelector('.comment-form textarea, .tc-form textarea');
@@ -2346,6 +2538,7 @@
     if (S.pendingPrayer) { const id = S.pendingPrayer; S.pendingPrayer = null; if ((S.prayers || []).some((p) => p.id === id)) openSheet('prayer', { id }); }
     if (S.pendingTrain) { const id = S.pendingTrain; S.pendingTrain = null; if ((S.trains || []).some((t) => t.id === id)) openSheet('meal', { id }); }
     if (S.pendingTopic) { const id = S.pendingTopic; S.pendingTopic = null; if ((S.topics || []).some((t) => t.id === id)) openTopic(id); }
+    if (S.pendingGift) { const id = S.pendingGift; S.pendingGift = null; if ((S.gifts || []).some((x) => x.id === id)) openSheet('gift', { id }); }
     if (S.pendingBackups && S.me.isAdmin) {
       const r = S.pendingBackups; S.pendingBackups = null; history.replaceState(null, '', '#' + S.view);
       await actions['open-backups']();
