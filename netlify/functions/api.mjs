@@ -15,7 +15,7 @@
 //   g/<gid>/topics/<id>             discussion { id, title, body, createdBy, createdAt, lastActivity, lastBy, commentCount, lastComment }
 //   g/<gid>/topicc/<topicId>/<cid>  { id, userId, text, at, editedAt } · g/<gid>/topicread/<uid> { topicId: lastReadAt }
 //   g/<gid>/gx/<id>                 gift exchange { id, name, budget, description, status: open|drawn, createdBy, drawnAt }
-//   g/<gid>/gxp/<xid>/<uid>         participant gift profile (encrypted fields) · g/<gid>/gxa/<xid>/<giver> { recipient (encrypted) }
+//   g/<gid>/gxp/<xid>/<uid|kidId>   participant gift profile (encrypted fields; kids also have parentId, name, age) · g/<gid>/gxa/<xid>/<giver> { recipient (encrypted) }
 //   g/<gid>/meals/<id>              meal train { id, recipient, start, end, days, dropStart/End, tz, address, coordinators, token, status, … }
 //   g/<gid>/mealslots/<id>/<date>   { date, name, email, phone, dish, note, userId|null, manage, at, remindedAt }
 //   mtpub/<token> → { gid, mtid }   public sign-up link · mtmanage/<token> → { gid, mtid, date } volunteer's change/cancel link
@@ -58,7 +58,7 @@ const SEALED = [
   [/^g\/[^/]+\/prayerc\/[^/]+\/[^/]+$/, ['text']],
   [/^g\/[^/]+\/topics\/[^/]+$/, ['title', 'body', 'lastComment']],
   [/^g\/[^/]+\/topicc\/[^/]+\/[^/]+$/, ['text']],
-  [/^g\/[^/]+\/gxp\/[^/]+\/[^/]+$/, ['snacks', 'stores', 'restaurants', 'colors', 'top', 'bottom', 'shoes', 'hobbies', 'likes', 'dislikes', 'stocking', 'wishlist']],
+  [/^g\/[^/]+\/gxp\/[^/]+\/[^/]+$/, ['snacks', 'stores', 'restaurants', 'colors', 'top', 'bottom', 'shoes', 'hobbies', 'likes', 'dislikes', 'stocking', 'wishlist', 'name', 'age']],
   [/^g\/[^/]+\/gxa\/[^/]+\/[^/]+$/, ['recipient']], // who's buying for whom
 ];
 const sealedFields = (key) => SEALED.find(([re]) => re.test(key))?.[1] || null;
@@ -1259,11 +1259,17 @@ const GIFT_KEYS = GIFT_FIELDS.map(([k]) => k);
 const gxKey = (gid, id) => `g/${gid}/gx/${id}`;
 const gxPartPrefix = (gid, id) => `g/${gid}/gxp/${id}/`;
 const gxMatchPrefix = (gid, id) => `g/${gid}/gxa/${id}/`;
-function readGiftExchange(body) {
+// Exchange types: 'adults' (members join themselves) or 'kids' (parents add their children)
+function readGiftExchange(body, prev) {
   const name = str(body.name, 120);
   if (!name) throw new HttpError(400, 'Give the exchange a name.');
   const budget = parseCost(body.budget);
-  return { name, budget, description: str(body.description, 4000), shareProfiles: !!body.shareProfiles };
+  const type = prev ? (prev.type || 'adults') : (body.type === 'kids' ? 'kids' : 'adults');
+  return {
+    name, budget, description: str(body.description, 4000), shareProfiles: !!body.shareProfiles, type,
+    noSpouses: type === 'adults' && !!body.noSpouses,
+    noSiblings: type === 'kids' && body.noSiblings !== false,
+  };
 }
 function readGiftProfile(body) {
   const out = {};
@@ -1272,6 +1278,8 @@ function readGiftProfile(body) {
 }
 const giftDetails = (p) => Object.fromEntries(GIFT_KEYS.map((k) => [k, p?.[k] || '']));
 const giftComplete = (p) => GIFT_KEYS.filter((k) => p?.[k]).length;
+const giftPid = (p) => p.kidId || p.userId;
+const isKids = (x) => x.type === 'kids';
 async function getGift(m, id) {
   const x = await get(gxKey(m.group.id, validId(id)));
   if (!x) throw new HttpError(404, 'Gift exchange not found.');
@@ -1279,52 +1287,114 @@ async function getGift(m, id) {
 }
 const isGiftCreator = (m, x) => x.createdBy === m.user.id;
 const canManageGift = (m, x) => isGiftCreator(m, x) || m.organizer;
+const giftParts = async (gid, xid) => (await listAll(gxPartPrefix(gid, xid))).sort((a, b) => a.joinedAt.localeCompare(b.joinedAt));
+// Display name for a participant: a member's name, or a child's name
+const partName = (p, names) => (p.kidId ? p.name || 'Child' : names[p.userId] || 'Former member');
 async function giftOut(m, x, names) {
-  const parts = (await listAll(gxPartPrefix(m.group.id, x.id))).sort((a, b) => a.joinedAt.localeCompare(b.joinedAt));
-  const mine = parts.find((p) => p.userId === m.user.id);
-  let match = null;
-  if (x.status === 'drawn' && mine) {
-    const a = await get(gxMatchPrefix(m.group.id, x.id) + m.user.id);
-    const rec = a && parts.find((p) => p.userId === a.recipient);
-    if (a) match = { userId: a.recipient, name: names[a.recipient] || 'Former member', details: giftDetails(rec), updatedAt: rec?.updatedAt || null };
-  }
+  const parts = await giftParts(m.group.id, x.id);
+  const kids = isKids(x);
+  const mineList = parts.filter((p) => (kids ? p.parentId : p.userId) === m.user.id);
+  const inIt = mineList.length > 0;
+  const matchesFor = async (p) => {
+    const a = await get(gxMatchPrefix(m.group.id, x.id) + giftPid(p));
+    if (!a) return null;
+    const rec = parts.find((q) => giftPid(q) === a.recipient);
+    return { giverId: giftPid(p), giverName: partName(p, names), id: a.recipient, userId: rec?.userId || null,
+      name: rec ? partName(rec, names) : 'Someone', age: rec?.age || '', details: giftDetails(rec), updatedAt: rec?.updatedAt || null };
+  };
+  const myMatches = x.status === 'drawn' ? (await Promise.all(mineList.map(matchesFor))).filter(Boolean) : [];
   return {
     id: x.id, name: x.name, budget: x.budget, description: x.description, status: x.status, drawnAt: x.drawnAt || null,
+    type: x.type || 'adults', noSpouses: !!x.noSpouses, noSiblings: kids && x.noSiblings !== false,
     createdBy: x.createdBy, createdByName: names[x.createdBy] || 'Former member', createdAt: x.createdAt,
     isCreator: isGiftCreator(m, x), canManage: canManageGift(m, x),
     shareProfiles: !!x.shareProfiles,
-    // Everyone sees who's in. Profiles are shared only when the exchange allows it, and only with people
-    // who joined. Matches are never part of this list.
-    participants: parts.map((p) => ({ userId: p.userId, name: names[p.userId] || 'Former member', joinedAt: p.joinedAt, filled: giftComplete(p),
-      ...(x.shareProfiles && mine && p.userId !== m.user.id ? { details: giftDetails(p), updatedAt: p.updatedAt || null } : {}) })),
-    joined: !!mine, myDetails: mine ? giftDetails(mine) : null, match,
+    // Everyone in the group sees who's in. Profiles are shared when the exchange allows it (always for kids).
+    // Matches are never part of this list.
+    participants: parts.map((p) => {
+      const own = kids ? p.parentId === m.user.id : p.userId === m.user.id;
+      return { id: giftPid(p), userId: p.userId || null, name: partName(p, names), joinedAt: p.joinedAt, filled: giftComplete(p),
+        ...(kids ? { parentId: p.parentId, parentName: names[p.parentId] || 'Former member', mine: own } : {}),
+        // Kids' profiles are always visible to the whole group; adult profiles when sharing is on
+        ...(kids || (x.shareProfiles && !own) ? { details: giftDetails(p), age: p.age || '', updatedAt: p.updatedAt || null } : {}) };
+    }),
+    joined: inIt,
+    myDetails: !kids && mineList[0] ? giftDetails(mineList[0]) : null,
+    mySpouseId: m.user.spouseId || null,
+    myKids: kids ? mineList.map((p) => ({ id: p.kidId, name: p.name || 'Child', age: p.age || '', details: giftDetails(p) })) : [],
+    match: !kids ? myMatches[0] || null : null,
+    kidMatches: kids ? myMatches : [],
   };
 }
-// Random single-cycle drawing (Sattolo): nobody draws themselves and everyone is in one chain
-function drawNames(ids) {
-  const a = ids.slice();
-  for (let i = a.length - 1; i > 0; i--) { const j = crypto.randomInt(0, i); [a[i], a[j]] = [a[j], a[i]]; }
-  const pairs = {};
-  for (let i = 0; i < a.length; i++) pairs[a[i]] = a[(i + 1) % a.length];
-  return pairs;
+// Random single-cycle drawing where possible: nobody draws themselves (or anyone `forbid` rules out),
+// and everyone is in one chain. Falls back to any valid assignment; returns null when none exists.
+function drawNames(ids, forbid = () => false) {
+  const n = ids.length;
+  const ok = (a, b) => a !== b && !forbid(a, b);
+  const shuffle = (arr) => { const a = arr.slice(); for (let i = a.length - 1; i > 0; i--) { const j = crypto.randomInt(0, i + 1); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+  const cycle = (order) => Object.fromEntries(order.map((id, i) => [id, order[(i + 1) % n]]));
+  for (let t = 0; t < 3000; t++) {
+    const o = shuffle(ids);
+    if (o.every((id, i) => ok(id, o[(i + 1) % n]))) return cycle(o);
+  }
+  // Randomized depth-first search for a single chain
+  let steps = 0;
+  const first = ids[crypto.randomInt(0, n)], path = [first], used = new Set([first]);
+  const dfs = () => {
+    if (++steps > 200000) return false;
+    if (path.length === n) return ok(path[n - 1], first);
+    for (const nx of shuffle(ids)) {
+      if (used.has(nx) || !ok(path[path.length - 1], nx)) continue;
+      path.push(nx); used.add(nx);
+      if (dfs()) return true;
+      path.pop(); used.delete(nx);
+    }
+    return false;
+  };
+  if (dfs()) return cycle(path);
+  // Any valid assignment (several smaller chains)
+  for (let t = 0; t < 20000; t++) {
+    const o = shuffle(ids);
+    if (ids.every((id, i) => ok(id, o[i]))) return Object.fromEntries(ids.map((id, i) => [id, o[i]]));
+  }
+  return null;
 }
+const giftBudgetText = (x) => (x.budget !== null && x.budget !== undefined ? ` (budget ${fmtCost(x.budget)})` : '');
 function giftEmail(group, x, giverName, recipientName, details, redraw) {
   const link = deepLink(group.id, `gifts/${x.id}`);
   const rows = GIFT_FIELDS.map(([k, label]) => [label, details[k]]);
   const html = emailShell(group.name, `You’re buying for ${esc(recipientName)}!`,
-    `<p style="margin:0 0 8px">Hi ${esc(firstName(giverName))}, ${redraw ? 'names were drawn again for' : 'names have been drawn for'} <b>${esc(x.name)}</b>. You’re buying a gift for <b>${esc(recipientName)}</b>${x.budget !== null && x.budget !== undefined ? ` (budget ${esc(fmtCost(x.budget))})` : ''}. Keep it a secret!</p>` +
+    `<p style="margin:0 0 8px">Hi ${esc(firstName(giverName))}, ${redraw ? 'names were drawn again for' : 'names have been drawn for'} <b>${esc(x.name)}</b>. You’re buying a gift for <b>${esc(recipientName)}</b>${esc(giftBudgetText(x))}. Keep it a secret!</p>` +
       (rows.some(([, v]) => v) ? `<p style="margin:10px 0 4px;color:#8e8e93;font-size:14px">What ${esc(firstName(recipientName))} shared</p>${detailRows(rows)}` : `<p style="margin:0">${esc(firstName(recipientName))} hasn’t filled in their gift profile yet — check the app later for ideas.</p>`),
     'See the details', link, `You’re part of ${x.name} in ${group.name}. Only you received this email.`);
-  const text = `You're buying for ${recipientName} in ${x.name}${x.budget != null ? ` (budget ${fmtCost(x.budget)})` : ''}.\n\n` +
+  const text = `You're buying for ${recipientName} in ${x.name}${giftBudgetText(x)}.\n\n` +
     GIFT_FIELDS.map(([k, label]) => details[k] ? `${label}: ${details[k]}` : '').filter(Boolean).join('\n') + `\n\n${link}`;
   return { subject: `[${group.name}] ${x.name}: you’re buying for ${recipientName}`, html, text };
+}
+// One email per parent listing who each of their children is buying for
+function giftKidsEmail(group, x, parentName, matches, redraw) {
+  const link = deepLink(group.id, `gifts/${x.id}`);
+  const one = matches.length === 1;
+  const blocks = matches.map((mt) => {
+    const rows = [['Age', mt.age], ...GIFT_FIELDS.map(([k, label]) => [label, mt.details[k]])];
+    return `<p style="margin:16px 0 4px;font-size:17px"><b>${esc(mt.giverName)}</b> is buying for <b>${esc(mt.name)}</b></p>` +
+      (rows.some(([, v]) => v) ? detailRows(rows) : `<p style="margin:0;color:#8e8e93">${esc(firstName(mt.name))}’s gift profile hasn’t been filled in yet — check the app later for ideas.</p>`);
+  }).join('');
+  const heading = one ? `${esc(matches[0].giverName)} is buying for ${esc(matches[0].name)}!` : 'Your kids’ gift exchange matches';
+  const html = emailShell(group.name, heading,
+    `<p style="margin:0 0 4px">Hi ${esc(firstName(parentName))}, ${redraw ? 'names were drawn again for' : 'names have been drawn for'} <b>${esc(x.name)}</b>${esc(giftBudgetText(x))}. Keep it a secret!</p>${blocks}`,
+    'See the details', link, `You added ${one ? 'a child' : 'children'} to ${x.name} in ${group.name}. Only you received this email.`);
+  const text = `Names have been drawn for ${x.name}${giftBudgetText(x)}.\n\n` + matches.map((mt) => `${mt.giverName} is buying for ${mt.name}${mt.age ? ` (age ${mt.age})` : ''}\n` +
+    [['Age', mt.age], ...GIFT_FIELDS.map(([k, label]) => [label, mt.details[k]])].slice(1).map(([l, v]) => (v ? `${l}: ${v}` : '')).filter(Boolean).join('\n')).join('\n\n') + `\n\n${link}`;
+  return { subject: one ? `[${group.name}] ${x.name}: ${matches[0].giverName} is buying for ${matches[0].name}` : `[${group.name}] ${x.name}: your kids’ matches`, html, text };
 }
 function notifyNewGift(ctx, group, x, byName, byId) {
   if (!notifyOf(group).gift) return;
   const link = deepLink(group.id, `gifts/${x.id}`);
-  return notifyGroup('gift', ctx, group, `Gift exchange: ${x.name}`, `Join the gift exchange: ${esc(x.name)}`,
-    `<p style="margin:0 0 8px">${esc(byName)} started a gift exchange. Join and fill in your gift profile so whoever draws your name knows what you’d like.</p>${detailRows([['Budget', fmtCost(x.budget)], ['Details', x.description]])}`,
-    'Join the exchange', link, `${byName} started a gift exchange: "${x.name}". Join here: ${link}`, byId);
+  const kids = isKids(x);
+  return notifyGroup('gift', ctx, group, `${kids ? 'Kids’ gift exchange' : 'Gift exchange'}: ${x.name}`, `${kids ? 'Add your kids to' : 'Join'} the gift exchange: ${esc(x.name)}`,
+    `<p style="margin:0 0 8px">${esc(byName)} started a ${kids ? 'gift exchange for kids. Add your children and fill in their gift profiles so whoever draws their name knows what they’d like.' : 'gift exchange. Join and fill in your gift profile so whoever draws your name knows what you’d like.'}</p>${detailRows([['Budget', fmtCost(x.budget)], ['Details', x.description]])}`,
+    kids ? 'Add your kids' : 'Join the exchange', link, `${byName} started a gift exchange: "${x.name}". ${kids ? 'Add your kids' : 'Join'} here: ${link}`, byId);
 }
 
 route('GET', '/groups/:gid/gifts', async ({ req, params }) => {
@@ -1344,7 +1414,7 @@ route('PUT', '/groups/:gid/gifts/:id', async ({ req, body, params }) => {
   const m = await requireMember(req, params.gid); requireFeature(m, 'gifts');
   const x = await getGift(m, params.id);
   if (!canManageGift(m, x)) throw new HttpError(403, 'Only the person who started this exchange or an organizer can edit it.');
-  const next = { ...x, ...readGiftExchange(body), updatedAt: now() };
+  const next = { ...x, ...readGiftExchange(body, x), updatedAt: now() };
   await put(gxKey(m.group.id, x.id), next);
   return { exchange: await giftOut(m, next, await nameMap(m.group.id)) };
 });
@@ -1356,13 +1426,25 @@ route('DELETE', '/groups/:gid/gifts/:id', async ({ req, params }) => {
   await del(gxKey(m.group.id, x.id));
   return { ok: true };
 });
-// Join or update my gift profile
+// Set my spouse (a member of this group). Saved on my account so it carries across exchanges.
+async function setSpouse(m, value) {
+  if (value === undefined) return;
+  const id = value ? validId(String(value)) : null;
+  if (id && id === m.user.id) throw new HttpError(400, 'You can’t pick yourself as your spouse.');
+  if (id && !(await get(`g/${m.group.id}/members/${id}`))) throw new HttpError(400, 'Pick someone in this group.');
+  if ((m.user.spouseId || null) === id) return;
+  const u = await get(`users/${m.user.id}`);
+  u.spouseId = id; await saveUser(u); m.user.spouseId = id;
+}
+// Join or update my gift profile (adult exchanges)
 route('PUT', '/groups/:gid/gifts/:id/me', async ({ req, body, params }) => {
   const m = await requireMember(req, params.gid); requireFeature(m, 'gifts');
   const x = await getGift(m, params.id);
+  if (isKids(x)) throw new HttpError(400, 'This is a kids’ exchange — add your children instead.');
   const key = gxPartPrefix(m.group.id, x.id) + m.user.id;
   const prev = await get(key);
   if (!prev && x.status !== 'open') throw new HttpError(400, 'Names have already been drawn, so this exchange is closed to new people.');
+  await setSpouse(m, body.spouseId);
   await put(key, { userId: m.user.id, joinedAt: prev?.joinedAt || now(), updatedAt: now(), ...readGiftProfile(body) });
   return { exchange: await giftOut(m, x, await nameMap(m.group.id)) };
 });
@@ -1373,13 +1455,50 @@ route('DELETE', '/groups/:gid/gifts/:id/me', async ({ req, params }) => {
   await del(gxPartPrefix(m.group.id, x.id) + m.user.id);
   return { exchange: await giftOut(m, x, await nameMap(m.group.id)) };
 });
-// Creator (or an organizer) removes someone before or between drawings
-route('DELETE', '/groups/:gid/gifts/:id/participants/:uid', async ({ req, params }) => {
+// Kids' exchanges: parents add, edit and remove their own children
+function readKid(body) {
+  const name = str(body?.name, 80);
+  if (!name) throw new HttpError(400, 'Add your child’s name.');
+  return { name, age: str(body?.age, 40), ...readGiftProfile(body) };
+}
+route('POST', '/groups/:gid/gifts/:id/kids', async ({ req, body, params }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'gifts');
+  const x = await getGift(m, params.id);
+  if (!isKids(x)) throw new HttpError(400, 'This exchange is for adults.');
+  if (x.status !== 'open') throw new HttpError(400, 'Names have already been drawn, so this exchange is closed to new kids.');
+  const kidId = newId();
+  await put(gxPartPrefix(m.group.id, x.id) + kidId, { kidId, parentId: m.user.id, joinedAt: now(), updatedAt: now(), ...readKid(body) });
+  return { exchange: await giftOut(m, x, await nameMap(m.group.id)) };
+});
+async function getMyKid(m, x, kid) {
+  const key = gxPartPrefix(m.group.id, x.id) + validId(kid);
+  const p = await get(key);
+  if (!p || !p.kidId) throw new HttpError(404, 'Child not found in this exchange.');
+  if (p.parentId !== m.user.id) throw new HttpError(403, 'Only the parent who added this child can change their profile.');
+  return [key, p];
+}
+route('PUT', '/groups/:gid/gifts/:id/kids/:kid', async ({ req, body, params }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'gifts');
+  const x = await getGift(m, params.id);
+  const [key, p] = await getMyKid(m, x, params.kid);
+  await put(key, { ...p, updatedAt: now(), ...readKid(body) });
+  return { exchange: await giftOut(m, x, await nameMap(m.group.id)) };
+});
+route('DELETE', '/groups/:gid/gifts/:id/kids/:kid', async ({ req, params }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'gifts');
+  const x = await getGift(m, params.id);
+  if (x.status !== 'open') throw new HttpError(400, 'Names have been drawn. Ask the organizer to re-open the exchange first.');
+  const [key] = await getMyKid(m, x, params.kid);
+  await del(key);
+  return { exchange: await giftOut(m, x, await nameMap(m.group.id)) };
+});
+// Creator (or an organizer) removes a person or child before or between drawings
+route('DELETE', '/groups/:gid/gifts/:id/participants/:pid', async ({ req, params }) => {
   const m = await requireMember(req, params.gid); requireFeature(m, 'gifts');
   const x = await getGift(m, params.id);
   if (!canManageGift(m, x)) throw new HttpError(403, 'Only the person who started this exchange can remove people.');
   if (x.status !== 'open') throw new HttpError(400, 'Names have been drawn. Re-open the exchange first, then remove them.');
-  await del(gxPartPrefix(m.group.id, x.id) + validId(params.uid));
+  await del(gxPartPrefix(m.group.id, x.id) + validId(params.pid));
   return { exchange: await giftOut(m, x, await nameMap(m.group.id)) };
 });
 // Draw names (or re-draw) and email everyone their match
@@ -1387,20 +1506,44 @@ route('POST', '/groups/:gid/gifts/:id/draw', async ({ req, params, ctx }) => {
   const m = await requireMember(req, params.gid); requireFeature(m, 'gifts');
   const x = await getGift(m, params.id);
   if (!canManageGift(m, x)) throw new HttpError(403, 'Only the person who started this exchange can draw names.');
-  const parts = await listAll(gxPartPrefix(m.group.id, x.id));
-  if (parts.length < 2) throw new HttpError(400, 'At least 2 people need to join before drawing names.');
+  const kids = isKids(x);
+  const parts = await giftParts(m.group.id, x.id);
+  if (parts.length < 2) throw new HttpError(400, `At least 2 ${kids ? 'kids' : 'people'} need to join before drawing names.`);
+  const userIds = [...new Set(parts.map((p) => (kids ? p.parentId : p.userId)))];
+  const users = Object.fromEntries((await Promise.all(userIds.map((id) => get(`users/${id}`)))).filter(Boolean).map((u) => [u.id, u]));
+  const married = (a, b) => a === b || users[a]?.spouseId === b || users[b]?.spouseId === a;
+  const byPid = Object.fromEntries(parts.map((p) => [giftPid(p), p]));
+  const forbid = kids
+    ? (a, b) => x.noSiblings !== false && married(byPid[a].parentId, byPid[b].parentId) // same parent, or the parents are married
+    : (a, b) => !!x.noSpouses && married(a, b);
+  const pairs = drawNames(parts.map(giftPid), forbid);
+  if (!pairs) throw new HttpError(400, kids
+    ? 'There’s no way to draw names without siblings getting each other. Add more kids, or turn off “Siblings don’t draw each other” in Edit Exchange.'
+    : 'There’s no way to draw names without spouses getting each other. Add more people, or turn off “Spouses don’t draw each other” in Edit Exchange.');
   const redraw = x.status === 'drawn';
   await Promise.all((await keys(gxMatchPrefix(m.group.id, x.id))).map((k) => del(k)));
-  const pairs = drawNames(parts.map((p) => p.userId));
   for (const [giver, recipient] of Object.entries(pairs)) await put(gxMatchPrefix(m.group.id, x.id) + giver, { giver, recipient, at: now() });
   const next = { ...x, status: 'drawn', drawnAt: now(), drawCount: (x.drawCount || 0) + 1 };
   await put(gxKey(m.group.id, x.id), next);
   const names = await nameMap(m.group.id);
-  const users = Object.fromEntries((await Promise.all(parts.map((p) => get(`users/${p.userId}`)))).filter(Boolean).map((u) => [u.id, u]));
-  for (const [giver, recipient] of Object.entries(pairs)) { // one private email per person
-    const u = users[giver]; if (!u) continue;
-    const e = giftEmail(m.group, next, u.name, names[recipient] || 'Someone', giftDetails(parts.find((p) => p.userId === recipient)), redraw);
-    ctx.background(sendEmail({ to: u.email, subject: e.subject, html: e.html, text: e.text, gid: m.group.id, logAs: `[${m.group.name}] ${x.name}: gift exchange match` }));
+  const logAs = `[${m.group.name}] ${x.name}: gift exchange match`;
+  if (kids) { // one private email per parent, covering all of their kids
+    const byParent = {};
+    for (const [giver, recipient] of Object.entries(pairs)) {
+      const g = byPid[giver], r = byPid[recipient];
+      (byParent[g.parentId] ||= []).push({ giverName: partName(g, names), name: partName(r, names), age: r.age || '', details: giftDetails(r) });
+    }
+    for (const [pid, matches] of Object.entries(byParent)) {
+      const u = users[pid]; if (!u) continue;
+      const e = giftKidsEmail(m.group, next, u.name, matches, redraw);
+      ctx.background(sendEmail({ to: u.email, subject: e.subject, html: e.html, text: e.text, gid: m.group.id, logAs }));
+    }
+  } else {
+    for (const [giver, recipient] of Object.entries(pairs)) { // one private email per person
+      const u = users[giver]; if (!u) continue;
+      const e = giftEmail(m.group, next, u.name, names[recipient] || 'Someone', giftDetails(byPid[recipient]), redraw);
+      ctx.background(sendEmail({ to: u.email, subject: e.subject, html: e.html, text: e.text, gid: m.group.id, logAs }));
+    }
   }
   console.log(`[gifts] ${redraw ? 're-drew' : 'drew'} ${parts.length} names for ${x.id}`);
   return { exchange: await giftOut(m, next, names) };
@@ -1422,7 +1565,9 @@ route('POST', '/groups/:gid/gifts/:id/reveal', async ({ req, params }) => {
   if (!isGiftCreator(m, x)) throw new HttpError(403, 'Only the person who started this exchange can reveal the matches.');
   if (x.status !== 'drawn') throw new HttpError(400, 'Names haven’t been drawn yet.');
   const names = await nameMap(m.group.id);
-  const matches = (await listAll(gxMatchPrefix(m.group.id, x.id))).map((a) => ({ giver: a.giver, giverName: names[a.giver] || 'Former member', recipient: a.recipient, recipientName: names[a.recipient] || 'Former member' }))
+  const byPid = Object.fromEntries((await giftParts(m.group.id, x.id)).map((p) => [giftPid(p), p]));
+  const nm = (id) => (byPid[id] ? partName(byPid[id], names) : names[id] || 'Former member');
+  const matches = (await listAll(gxMatchPrefix(m.group.id, x.id))).map((a) => ({ giver: a.giver, giverName: nm(a.giver), recipient: a.recipient, recipientName: nm(a.recipient) }))
     .sort((a, b) => a.giverName.localeCompare(b.giverName));
   console.log(`[gifts] matches revealed to creator ${m.user.id} for ${x.id}`);
   return { matches };

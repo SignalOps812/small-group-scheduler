@@ -911,3 +911,16 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .people .person.tappable:active { background: var(--fill-2, rgba(120,120,128,.12)); }
 .people .person .chev { color: var(--label-3); margin-left: auto; display: inline-flex; }
 .sheet-head .back-btn { display: inline-flex; align-items: center; gap: 2px; }
+/* Gift exchange type picker (Adults / Kids) */
+.segmented.gx-type { display: grid; grid-template-columns: 1fr 1fr; width: 100%; box-sizing: border-box; gap: 2px; }
+.segmented.gx-type label { position: relative; display: block; text-align: center; cursor: pointer; }
+.segmented.gx-type input { position: absolute; opacity: 0; pointer-events: none; }
+.segmented.gx-type span { display: block; padding: 6px 10px; border-radius: 7px; font-size: 14px; font-weight: 500; }
+.segmented.gx-type input:checked + span { background: #fff; box-shadow: 0 3px 8px rgba(0,0,0,.12), 0 1px 1px rgba(0,0,0,.04); font-weight: 600; }
+.segmented.gx-type input:focus-visible + span { outline: 2px solid var(--blue); outline-offset: 1px; }
+:root[data-theme="dark"] .segmented.gx-type input:checked + span { background: #636366; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .segmented.gx-type input:checked + span { background: #636366; } }
+.gx-type-foot { margin: 8px 16px 4px; text-align: center; }
+form:has([name=type][value=kids]:checked) .only-adults,
+form:has([name=type][value=adults]:checked) .only-kids { display: none; }
+#gp-spouse { text-align: right; }

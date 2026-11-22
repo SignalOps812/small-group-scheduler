@@ -349,7 +349,7 @@
     if (showTab('prayer')) steps.push({ el: () => tabEl('prayer'), view: 'prayer', title: 'Prayer Requests', text: 'Share a request with the group, and post updates as things change. Everyone can comment to offer encouragement.' });
     if (showTab('meals')) steps.push({ el: () => tabEl('meals'), view: 'meals', title: 'Meal Trains', text: 'When a family needs support, start a meal train and share its link. Anyone can sign up for a day — even without an account — and gets the address, allergy notes and a reminder by email.' });
     if (showTab('topics')) steps.push({ el: () => tabEl('topics'), view: 'topics', title: 'Discussions', text: 'A forum for the group. Start a topic and reply in the thread. Topics with something new sit under <b>Unread</b>, and you can read replies oldest or newest first.' });
-    if (showTab('gifts')) steps.push({ el: () => tabEl('gifts'), view: 'gifts', title: 'Gift Exchange', text: 'Join a gift exchange and fill in your wish list, sizes and favorites. When names are drawn, you\u2019ll get an email \u2014 and see here \u2014 who you\u2019re buying for, with everything they shared.' });
+    if (showTab('gifts')) steps.push({ el: () => tabEl('gifts'), view: 'gifts', title: 'Gift Exchange', text: 'Join a gift exchange (or add your kids to a kids\u2019 exchange) and fill in wish lists, sizes and favorites. When names are drawn, you\u2019ll get an email \u2014 and see here \u2014 who you\u2019re buying for, with everything they shared.' });
     if (showTab('members')) steps.push({ el: () => tabEl('members'), view: 'members', title: 'Members', text: `See who’s in the group and tap anyone to call, text or email them.${feat('members') ? '' : ' (This tab is hidden from regular members right now.)'}` });
     steps.push(
       { el: () => document.querySelector('.avatar-btn'), title: 'Your profile', text: 'Add your mobile number, choose exactly which emails you get, switch between light and dark mode, or sign out. You can replay this tour from here anytime.' },
@@ -840,11 +840,14 @@
   function renderGifts() {
     const list = S.gifts || [];
     const card = (x) => {
+      const kids = x.type === 'kids', n = x.participants.length;
       const pill = x.status === 'drawn' ? (x.joined ? '<span class="pill green">Names drawn</span>' : '<span class="pill">Names drawn</span>')
-        : x.joined ? '<span class="pill blue">You’re in</span>' : '<span class="pill orange">Join</span>';
+        : x.joined ? `<span class="pill blue">${kids ? 'Your kids are in' : 'You\u2019re in'}</span>` : `<span class="pill orange">${kids ? 'Add kids' : 'Join'}</span>`;
+      const count = kids ? `${n} ${n === 1 ? 'kid' : 'kids'}` : `${n} ${n === 1 ? 'person' : 'people'}`;
       return `<button class="card gift-card" data-action="open-gift" data-id="${esc(x.id)}">
-        <div class="gc-top"><span class="gc-icon">${I.gift}</span><div class="gc-main"><h3>${esc(x.name)}</h3><div class="sub">${giftBudget(x) ? `Budget ${esc(giftBudget(x))} · ` : ''}${x.participants.length} ${x.participants.length === 1 ? 'person' : 'people'}</div></div>${pill}</div>
+        <div class="gc-top"><span class="gc-icon">${I.gift}</span><div class="gc-main"><h3>${esc(x.name)}</h3><div class="sub">${kids ? 'Kids · ' : ''}${giftBudget(x) ? `Budget ${esc(giftBudget(x))} · ` : ''}${count}</div></div>${pill}</div>
         ${x.match ? `<div class="gc-match">${avatar(x.match.userId, x.match.name, 'xs')}<span>You’re buying for <b>${esc(x.match.name)}</b></span></div>` : ''}
+        ${(x.kidMatches || []).map((k) => `<div class="gc-match">${avatar(k.id, k.name, 'xs')}<span>${esc(k.giverName)} is buying for <b>${esc(k.name)}</b></span></div>`).join('')}
       </button>`;
     };
     return `
@@ -857,6 +860,19 @@
           : `<div class="empty">${I.gift}<div>No gift exchanges yet.</div><div class="small" style="margin-top:4px">Start one, everyone joins and fills in their wish list, then draw names.</div>
               <button class="btn sm" style="margin-top:14px" data-action="new-gift">New Exchange</button></div>`}
       </div>`;
+  }
+  function giftFieldGroups(prev, kid) {
+    const fld = (k, ph, area) => area
+      ? `<div class="row stack"><label class="gp-label" for="gp-${k}">${esc(giftLabel(k))}</label><textarea id="gp-${k}" name="${k}" placeholder="${esc(ph)}" maxlength="${k === 'wishlist' ? 3000 : 600}">${esc(prev[k] || '')}</textarea></div>`
+      : `<div class="row"><label for="gp-${k}">${esc(giftLabel(k))}</label><input id="gp-${k}" name="${k}" placeholder="${esc(ph)}" maxlength="600" value="${esc(prev[k] || '')}"></div>`;
+    return `<div class="group-label" style="margin-top:22px">Favorites</div>
+      <div class="group">${fld('snacks', 'Snacks, drinks, treats', true)}${fld('stores', kid ? 'Stores they love' : 'Where you like to shop', true)}${fld('restaurants', 'Favorite places to eat', true)}${fld('colors', 'Favorite colors')}</div>
+      <div class="group-label" style="margin-top:22px">Clothing sizes</div>
+      <div class="group">${fld('top', kid ? 'e.g. Youth M, 6T' : 'e.g. M')}${fld('bottom', kid ? 'e.g. 7' : 'e.g. 32x30')}${fld('shoes', kid ? 'e.g. Youth 2' : 'e.g. 10')}</div>
+      <div class="group-label" style="margin-top:22px">${kid ? 'About them' : 'About me'}</div>
+      <div class="group">${fld('hobbies', 'What they do for fun', true)}${fld('likes', 'Characters, games, toys, interests', true)}${fld('dislikes', 'Allergies, things to avoid', true)}</div>
+      <div class="group-label" style="margin-top:22px">Gift ideas</div>
+      <div class="group">${fld('stocking', 'Small things they\u2019d love', true)}${fld('wishlist', 'Specific items or links \u2014 one per line', true)}</div>`;
   }
   function giftDetailsBlock(d, emptyText) {
     const sections = GIFT_SECTIONS.map(([title, keys]) => [title, keys.filter((k) => d?.[k])]).filter(([, ks]) => ks.length);
@@ -1017,7 +1033,7 @@
   }
   function refreshSheet() {
     const sheet = $sheetRoot.querySelector('.sheet');
-    if (!sheet || !S.sheet || ['event-form', 'poll-form', 'group-new', 'group-join', 'group-edit', 'profile', 'prayer-form', 'meal-form', 'meal-signup', 'topic-form', 'gift-form', 'gift-profile'].includes(S.sheet.kind)) return;
+    if (!sheet || !S.sheet || ['event-form', 'poll-form', 'group-new', 'group-join', 'group-edit', 'profile', 'prayer-form', 'meal-form', 'meal-signup', 'topic-form', 'gift-form', 'gift-profile', 'gift-kid'].includes(S.sheet.kind)) return;
     const body = sheet.querySelector('.sheet-body'), top = body ? body.scrollTop : 0;
     const html = sheetHtml();
     if (!html) return closeSheet();
@@ -1530,20 +1546,33 @@
         </div></form>`;
     }
     if (s.kind === 'gift-form') {
-      const x = s.id ? (S.gifts || []).find((y) => y.id === s.id) : { name: '', budget: null, description: '', shareProfiles: false };
+      const x = s.id ? (S.gifts || []).find((y) => y.id === s.id) : { name: '', budget: null, description: '', shareProfiles: false, type: s.type || 'adults', noSpouses: true, noSiblings: true };
       if (!x) return '';
+      const typeRow = s.id ? '' : `<div class="segmented gx-type" role="radiogroup" aria-label="Exchange type">
+          <label><input type="radio" name="type" value="adults" ${x.type !== 'kids' ? 'checked' : ''}><span>Adults</span></label>
+          <label><input type="radio" name="type" value="kids" ${x.type === 'kids' ? 'checked' : ''}><span>Kids</span></label></div>
+        <p class="group-foot gx-type-foot only-adults">Members join and fill in their own gift profile.</p>
+        <p class="group-foot gx-type-foot only-kids">Parents add their children, and get an email with who each child is buying for.</p>`;
+      const showAdults = s.id ? x.type !== 'kids' : true, showKids = s.id ? x.type === 'kids' : true;
       return `<form autocomplete="off" novalidate>${head(s.id ? 'Edit Exchange' : 'New Gift Exchange', 'Cancel', s.id ? 'Save' : 'Create')}
         <div class="sheet-body">
-          <div class="group">
+          ${typeRow}
+          <div class="group" style="${s.id ? '' : 'margin-top:14px'}">
             <div class="row"><input name="name" placeholder="Name (e.g. Christmas Secret Santa)" maxlength="120" value="${esc(x.name)}" aria-label="Name" required></div>
             <div class="row"><label for="gx-budget">Budget</label><span class="prefix">$</span><input id="gx-budget" name="budget" inputmode="decimal" placeholder="25" value="${esc(x.budget ?? '')}"></div>
             <div class="row stack"><textarea name="description" placeholder="Description — when you’ll swap gifts, any rules or themes" maxlength="4000" aria-label="Description">${esc(x.description)}</textarea></div>
           </div>
-          <div class="group" style="margin-top:22px">
-            <div class="row"><span>Share wish lists<small class="row-sub">Everyone in the exchange can see each other\u2019s gift profiles. Who\u2019s buying for whom stays secret.</small></span>
+          ${showAdults ? `<div class="group only-adults" style="margin-top:22px">
+            <div class="row"><span>Spouses don\u2019t draw each other<small class="row-sub">Uses the spouse each person picks in their gift profile.</small></span>
+              <label class="switch"><input type="checkbox" name="noSpouses" ${x.noSpouses ? 'checked' : ''}><span></span></label></div>
+            <div class="row"><span>Share wish lists<small class="row-sub">Everyone in the group can see gift profiles, even if they haven\u2019t joined. Who\u2019s buying for whom stays secret.</small></span>
               <label class="switch"><input type="checkbox" name="shareProfiles" ${x.shareProfiles ? 'checked' : ''}><span></span></label></div>
+          </div>` : ''}
+          ${showKids ? `<div class="group only-kids" style="margin-top:22px">
+            <div class="row"><span>Siblings don\u2019t draw each other<small class="row-sub">Kids added by the same parent, or by spouses, won\u2019t get each other.</small></span>
+              <label class="switch"><input type="checkbox" name="noSiblings" ${x.noSiblings !== false ? 'checked' : ''}><span></span></label></div>
           </div>
-          <p class="group-foot">${s.id ? '' : 'Everyone in the group can join and fill in their gift profile. When enough people have joined, you draw names and each person gets an email with who they’re buying for.'}</p>
+          <p class="group-foot only-kids">Kids\u2019 gift profiles are visible to everyone in the group. Who\u2019s buying for whom stays secret.</p>` : ''}
           <div id="sheet-msg"></div>
         </div></form>`;
     }
@@ -1557,7 +1586,16 @@
         : `<div class="row"><label for="gp-${k}">${esc(giftLabel(k))}</label><input id="gp-${k}" name="${k}" placeholder="${esc(ph)}" maxlength="600" value="${esc(prev[k] || '')}"></div>`;
       return `<form autocomplete="off" novalidate>${head(x.joined ? 'My Gift Profile' : 'Join Exchange', 'Cancel', x.joined ? 'Save' : 'Join')}
         <div class="sheet-body">
-          <p class="group-foot" style="margin-top:0">Only the person who draws your name sees this. Fill in what you like — everything is optional.${!x.myDetails && prev.wishlist !== undefined ? ' We filled in your answers from another exchange.' : ''}</p>
+          <p class="group-foot" style="margin-top:0">${x.shareProfiles ? 'Everyone in the group can see this.' : 'Only the person who draws your name sees this.'} Fill in what you like — everything is optional.${!x.myDetails && prev.wishlist !== undefined ? ' We filled in your answers from another exchange.' : ''}</p>
+          <div class="group-label" style="margin-top:14px">Spouse</div>
+          <div class="group"><div class="row"><label for="gp-spouse">Spouse</label>
+            <select id="gp-spouse" name="spouseId"><option value="">None</option>${(() => {
+              const opts = (S.members || []).filter((mm) => mm.id !== S.me.id).sort((a, b) => a.name.localeCompare(b.name));
+              const cur = x.mySpouseId;
+              return (cur && !opts.some((mm) => mm.id === cur) ? `<option value="${esc(cur)}" selected>Someone in another group</option>` : '') +
+                opts.map((mm) => `<option value="${esc(mm.id)}" ${mm.id === cur ? 'selected' : ''}>${esc(mm.name)}</option>`).join('');
+            })()}</select></div></div>
+          <p class="group-foot">${x.noSpouses ? 'This exchange won\u2019t pair you with your spouse.' : 'Used when an exchange is set so spouses don\u2019t draw each other.'}</p>
           <div class="group-label" style="margin-top:14px">Favorites</div>
           <div class="group">
             ${fld('snacks', 'Snacks, drinks, treats', true)}
@@ -1575,20 +1613,49 @@
           <div id="sheet-msg"></div>
         </div></form>`;
     }
+    if (s.kind === 'gift-kid') {
+      const x = (S.gifts || []).find((y) => y.id === s.id);
+      if (!x) return '';
+      const k = s.kid ? (x.myKids || []).find((c) => c.id === s.kid) : null;
+      if (s.kid && !k) return '';
+      const prev = k ? { ...k.details } : {};
+      return `<form autocomplete="off" novalidate>${head(k ? 'Edit Child' : 'Add a Child', 'Cancel', k ? 'Save' : 'Add')}
+        <div class="sheet-body">
+          <div class="group">
+            <div class="row"><input name="name" placeholder="Child\u2019s name" maxlength="80" value="${esc(k?.name || '')}" aria-label="Child\u2019s name" required></div>
+            <div class="row"><label for="gk-age">Age</label><input id="gk-age" name="age" placeholder="e.g. 7" maxlength="40" value="${esc(k?.age || '')}"></div>
+          </div>
+          <p class="group-foot">Everyone in the group can see this profile. Fill in what you like \u2014 everything is optional.</p>
+          ${giftFieldGroups(prev, true)}
+          ${k && x.status === 'open' ? `<div class="group" style="margin-top:22px"><div class="row danger-row" data-action="remove-kid" data-id="${esc(x.id)}" data-kid="${esc(k.id)}" role="button" tabindex="0">Remove ${esc(k.name)} From Exchange</div></div>` : ''}
+          <div id="sheet-msg"></div>
+        </div></form>`;
+    }
     if (s.kind === 'gift-person') {
-      const x = (S.gifts || []).find((y) => y.id === s.id), p = x?.participants.find((q) => q.userId === s.uid);
+      const x = (S.gifts || []).find((y) => y.id === s.id), p = x?.participants.find((q) => q.id === s.uid);
       if (!p?.details) return '';
       return `<div class="sheet-head"><button class="l back-btn" type="button" data-action="gift-back" data-id="${esc(x.id)}">${I.left.replace('<svg', '<svg width="14" height="14"')} Back</button><div class="t">Gift Profile</div><span></span></div>
         <div class="sheet-body">
-          <div class="detail-hero">${avatar(p.userId, p.name, 'lg')}<h2 style="margin-top:12px">${esc(p.name)}</h2><div class="w">${esc(x.name)}</div></div>
+          <div class="detail-hero">${avatar(p.id, p.name, 'lg')}<h2 style="margin-top:12px">${esc(p.name)}</h2><div class="w">${p.age ? `Age ${esc(p.age)} · ` : ''}${p.parentName ? `Parent: ${esc(p.parentName)} · ` : ''}${esc(x.name)}</div></div>
           ${giftDetailsBlock(p.details, `${p.name.split(' ')[0]} hasn\u2019t filled in their gift profile yet.`)}
         </div>`;
     }
     if (s.kind === 'gift') {
       const x = (S.gifts || []).find((y) => y.id === s.id);
       if (!x) return '';
-      const drawn = x.status === 'drawn', n = x.participants.length;
+      const drawn = x.status === 'drawn', n = x.participants.length, kids = x.type === 'kids';
       const reveal = S.giftReveal && S.giftReveal.id === x.id ? S.giftReveal.matches : null;
+      const chev = `<span class="chev">${I.right.replace('<svg', '<svg width="14" height="14"')}</span>`;
+      const kidMatchHtml = (x.kidMatches || []).map((k) => `<div class="card gift-match">
+          <div class="gm-head">${avatar(k.id, k.name)}<div><small>${esc(k.giverName)} is buying for</small><b>${esc(k.name)}</b></div></div>
+          <p class="gm-note">${k.age ? `Age ${esc(k.age)}. ` : ''}Keep it a secret!${giftBudget(x) ? ` Budget: ${esc(giftBudget(x))}.` : ''}</p>
+        </div>${giftDetailsBlock(k.details, `${k.name.split(' ')[0]}\u2019s gift profile hasn\u2019t been filled in yet. Check back later.`)}`).join('');
+      const myKidsHtml = kids ? `<div class="group-label" style="margin-top:22px">Your kids in this exchange</div>
+        <div class="group people">
+          ${(x.myKids || []).map((k) => `<div class="person tappable" data-action="edit-kid" data-id="${esc(x.id)}" data-kid="${esc(k.id)}" role="button" tabindex="0">${avatar(k.id, k.name)}<div class="nm">${esc(k.name)}<small>${k.age ? `Age ${esc(k.age)} · ` : ''}Edit gift profile</small></div>${chev}</div>`).join('')}
+          ${!drawn ? `<div class="row button-row" data-action="add-kid" data-id="${esc(x.id)}" role="button" tabindex="0">${I.plus.replace('<svg', '<svg width="18" height="18"')} Add a Child</div>`
+            : !(x.myKids || []).length ? '<div class="person"><div class="nm muted">You didn\u2019t add any kids before names were drawn.</div></div>' : ''}
+        </div>` : '';
       return `${head('Gift Exchange', 'Done')}
         <div class="sheet-body">
           <div class="detail-hero">
@@ -1597,26 +1664,28 @@
             <div class="w">${giftBudget(x) ? `Budget ${esc(giftBudget(x))} · ` : ''}${drawn ? `Names drawn ${esc(fmtStamp(x.drawnAt))}` : 'Open for sign-ups'}</div>
           </div>
           ${x.description ? `<div class="group"><div class="detail-desc">${esc(x.description)}</div></div>` : ''}
-          ${x.match ? `<div class="card gift-match">
+          ${kids ? kidMatchHtml + myKidsHtml : ''}
+          ${kids ? '' : x.match ? `<div class="card gift-match">
               <div class="gm-head">${avatar(x.match.userId, x.match.name)}<div><small>You’re buying for</small><b>${esc(x.match.name)}</b></div></div>
               <p class="gm-note">Keep it a secret!${giftBudget(x) ? ` Budget: ${esc(giftBudget(x))}.` : ''}</p>
             </div>
             ${giftDetailsBlock(x.match.details, `${x.match.name.split(' ')[0]} hasn’t filled in their gift profile yet. Check back later.`)}`
           : drawn && !x.joined ? '<div class="notice card" style="margin-top:16px"><div>Names have been drawn. You weren’t part of this exchange.</div></div>' : ''}
-          ${x.joined ? `<div class="group" style="margin-top:22px"><div class="row button-row" data-action="gift-profile" data-id="${esc(x.id)}" role="button" tabindex="0">${I.gift.replace('<svg', '<svg width="18" height="18"')} My Gift Profile<span class="chev">${I.right.replace('<svg', '<svg width="14" height="14"')}</span></div></div>`
+          ${kids ? '' : x.joined ? `<div class="group" style="margin-top:22px"><div class="row button-row" data-action="gift-profile" data-id="${esc(x.id)}" role="button" tabindex="0">${I.gift.replace('<svg', '<svg width="18" height="18"')} My Gift Profile<span class="chev">${I.right.replace('<svg', '<svg width="14" height="14"')}</span></div></div>`
             : !drawn ? `<div class="actions" style="margin-top:18px"><button class="btn block" data-action="gift-profile" data-id="${esc(x.id)}">Join &amp; Fill In My Profile</button></div>` : ''}
-          <div class="group-label" style="margin-top:22px">${n} ${n === 1 ? 'person' : 'people'} in this exchange</div>
+          <div class="group-label" style="margin-top:22px">${kids ? `${n} ${n === 1 ? 'kid' : 'kids'}` : `${n} ${n === 1 ? 'person' : 'people'}`} in this exchange</div>
           <div class="group people">
-            ${n ? x.participants.map((p) => `<div class="person${p.details ? ' tappable' : ''}" ${p.details ? `data-action="gift-person" data-id="${esc(x.id)}" data-uid="${esc(p.userId)}" role="button" tabindex="0"` : ''}>${avatar(p.userId, p.name)}<div class="nm">${esc(p.name)}${p.userId === S.me.id ? ' <span class="muted">(you)</span>' : ''}<small>${p.filled ? `${p.filled} of 12 details filled in` : 'Profile not filled in yet'}</small></div>
+            ${n ? x.participants.map((p) => `<div class="person${p.details ? ' tappable' : ''}" ${p.details ? `data-action="gift-person" data-id="${esc(x.id)}" data-uid="${esc(p.id)}" role="button" tabindex="0"` : ''}>${avatar(p.id, p.name)}<div class="nm">${esc(p.name)}${!kids && p.userId === S.me.id ? ' <span class="muted">(you)</span>' : ''}<small>${kids ? `${p.age ? `Age ${esc(p.age)} · ` : ''}${p.mine ? 'Your child' : `Parent: ${esc(p.parentName)}`} · ` : ''}${p.filled ? `${p.filled} of 12 details filled in` : 'Profile not filled in yet'}</small></div>
               ${p.details ? `<span class="chev">${I.right.replace('<svg', '<svg width="14" height="14"')}</span>` : ''}
-              ${x.canManage && !drawn && p.userId !== S.me.id ? `<button class="link-btn danger" data-action="gift-remove" data-id="${esc(x.id)}" data-uid="${esc(p.userId)}">Remove</button>` : ''}</div>`).join('')
-              : '<div class="person"><div class="nm muted">Nobody has joined yet.</div></div>'}
+              ${x.canManage && !drawn && (kids ? !p.mine : p.userId !== S.me.id) ? `<button class="link-btn danger" data-action="gift-remove" data-id="${esc(x.id)}" data-uid="${esc(p.id)}">Remove</button>` : ''}</div>`).join('')
+              : `<div class="person"><div class="nm muted">${kids ? 'No kids have been added yet.' : 'Nobody has joined yet.'}</div></div>`}
           </div>
-          ${x.shareProfiles ? `<p class="group-foot">${x.joined ? 'Wish lists are shared in this exchange \u2014 tap anyone to see theirs.' : 'Wish lists are shared with everyone who joins.'}</p>` : ''}
+          ${kids ? `<p class="group-foot">Tap any child to see their gift profile.${x.noSiblings ? ' Siblings won\u2019t draw each other.' : ''}</p>` : x.noSpouses ? '<p class="group-foot">Spouses won\u2019t draw each other.</p>' : ''}
+          ${!kids && x.shareProfiles ? `<p class="group-foot">Wish lists are shared \u2014 tap anyone to see theirs.</p>` : ''}
           ${x.canManage ? `<div class="group-label" style="margin-top:22px">${x.isCreator ? 'You started this exchange' : 'Organizer tools'}</div>
             <div class="actions" style="margin-top:6px">
               ${!drawn ? `<button class="btn block" data-action="gift-draw" data-id="${esc(x.id)}" ${n < 2 ? 'disabled' : ''}>Draw Names</button>
-                <p class="group-foot" style="margin:2px 4px 8px">${n < 2 ? 'At least 2 people need to join first.' : `Everyone gets a private email with who they’re buying for. You won’t see the matches unless you choose to reveal them.`}</p>` : ''}
+                <p class="group-foot" style="margin:2px 4px 8px">${n < 2 ? `At least 2 ${kids ? 'kids need to be added' : 'people need to join'} first.` : `${kids ? 'Each parent gets a private email with who their kids are buying for.' : 'Everyone gets a private email with who they\u2019re buying for.'} You won\u2019t see the matches unless you choose to reveal them.`}</p>` : ''}
               ${drawn && x.isCreator ? (reveal
                 ? `<div class="group reveal-list">${reveal.map((r) => `<div class="row"><span>${esc(r.giverName)}</span><span class="v">→ ${esc(r.recipientName)}</span></div>`).join('')}</div>
                    <button class="btn tinted block" data-action="gift-hide" data-id="${esc(x.id)}">Hide Matches</button>`
@@ -1773,7 +1842,8 @@
         setTimeout(() => location.reload(), 900);
       } else if (s.kind === 'gift-form') {
         if (!v.name.trim()) { btn.disabled = false; return err('Give the exchange a name.'); }
-        const body = { name: v.name, budget: v.budget, description: v.description, shareProfiles: !!form.elements.shareProfiles?.checked };
+        const body = { name: v.name, budget: v.budget, description: v.description, type: v.type || 'adults', shareProfiles: !!form.elements.shareProfiles?.checked,
+          noSpouses: !!form.elements.noSpouses?.checked, noSiblings: !!form.elements.noSiblings?.checked };
         const r = s.id ? await api('PUT', gp(`/gifts/${s.id}`), body) : await api('POST', gp('/gifts'), body);
         upsertGift(r.exchange); S.view = 'gifts'; render();
         openSheet('gift', { id: r.exchange.id }); history.replaceState(null, '', '#gifts/' + r.exchange.id);
@@ -1781,9 +1851,16 @@
       } else if (s.kind === 'gift-profile') {
         const wasIn = (S.gifts || []).find((y) => y.id === s.id)?.joined;
         const body = Object.fromEntries(['snacks', 'stores', 'restaurants', 'colors', 'top', 'bottom', 'shoes', 'hobbies', 'likes', 'dislikes', 'stocking', 'wishlist'].map((k) => [k, v[k] || '']));
+        body.spouseId = v.spouseId || '';
         const r = await api('PUT', gp(`/gifts/${s.id}/me`), body);
         upsertGift(r.exchange); render(); openSheet('gift', { id: s.id });
         toast(wasIn ? 'Gift profile saved' : 'You\u2019re in! Your profile is saved');
+      } else if (s.kind === 'gift-kid') {
+        if (!(v.name || '').trim()) { btn.disabled = false; return err('Add your child\u2019s name.'); }
+        const body = Object.fromEntries(['name', 'age', 'snacks', 'stores', 'restaurants', 'colors', 'top', 'bottom', 'shoes', 'hobbies', 'likes', 'dislikes', 'stocking', 'wishlist'].map((k) => [k, v[k] || '']));
+        const r = s.kid ? await api('PUT', gp(`/gifts/${s.id}/kids/${s.kid}`), body) : await api('POST', gp(`/gifts/${s.id}/kids`), body);
+        upsertGift(r.exchange); render(); openSheet('gift', { id: s.id });
+        toast(s.kid ? 'Saved' : `${v.name.trim()} was added`);
       } else if (s.kind === 'topic-form') {
         if (!v.title.trim()) { btn.disabled = false; return err('Please give the topic a title.'); }
         const r = s.id ? await api('PUT', gp(`/topics/${s.id}`), { title: v.title, body: v.body }) : await api('POST', gp('/topics'), { title: v.title, body: v.body });
@@ -2217,9 +2294,9 @@
       catch (ex) { toast(ex.message); }
     },
     'gift-remove': async (el) => {
-      const x = S.gifts.find((y) => y.id === el.dataset.id), p = x.participants.find((q) => q.userId === el.dataset.uid);
+      const x = S.gifts.find((y) => y.id === el.dataset.id), p = x.participants.find((q) => q.id === el.dataset.uid);
       if (!(await ask({ title: `Remove ${p.name}?`, message: 'They\u2019ll be taken out of this exchange and their gift profile for it removed.', ok: 'Remove', destructive: true }))) return;
-      try { const r = await api('DELETE', gp(`/gifts/${x.id}/participants/${p.userId}`)); upsertGift(r.exchange); refreshSheet(); render(); }
+      try { const r = await api('DELETE', gp(`/gifts/${x.id}/participants/${p.id}`)); upsertGift(r.exchange); refreshSheet(); render(); }
       catch (ex) { toast(ex.message); }
     },
     'gift-draw': async (el) => {
@@ -2248,6 +2325,14 @@
     'gift-hide': () => { S.giftReveal = null; refreshSheet(); },
     'gift-person': (el) => { openSheet('gift-person', { id: el.dataset.id, uid: el.dataset.uid }); },
     'gift-back': (el) => openSheet('gift', { id: el.dataset.id }),
+    'add-kid': (el) => openSheet('gift-kid', { id: el.dataset.id }),
+    'edit-kid': (el) => openSheet('gift-kid', { id: el.dataset.id, kid: el.dataset.kid }),
+    'remove-kid': async (el) => {
+      const x = S.gifts.find((y) => y.id === el.dataset.id), k = (x?.myKids || []).find((c) => c.id === el.dataset.kid);
+      if (!k || !(await ask({ title: `Remove ${k.name}?`, message: 'Their gift profile for this exchange will be deleted.', ok: 'Remove', destructive: true }))) return;
+      try { const r = await api('DELETE', gp(`/gifts/${x.id}/kids/${k.id}`)); upsertGift(r.exchange); render(); openSheet('gift', { id: x.id }); toast(`${k.name} was removed`); }
+      catch (ex) { toast(ex.message); }
+    },
     'delete-gift': async (el) => {
       const x = S.gifts.find((y) => y.id === el.dataset.id);
       if (!(await ask({ title: `Delete \u201c${x.name}\u201d?`, message: 'Everyone\u2019s gift profiles and matches for this exchange will be deleted.', ok: 'Delete', destructive: true }))) return;
@@ -2518,7 +2603,7 @@
     if (!S.me || document.hidden) return;
     if (TOUR) return;
     if (!S.groups.length) return; // join/create screen: never redraw it, or it wipes what someone is typing
-    if (S.sheet && ['event-form', 'poll-form', 'profile', 'group-new', 'group-join', 'group-edit', 'prayer-form', 'meal-form', 'meal-signup', 'topic-form', 'gift-form', 'gift-profile'].includes(S.sheet.kind)) return;
+    if (S.sheet && ['event-form', 'poll-form', 'profile', 'group-new', 'group-join', 'group-edit', 'prayer-form', 'meal-form', 'meal-signup', 'topic-form', 'gift-form', 'gift-profile', 'gift-kid'].includes(S.sheet.kind)) return;
     if (S.sheet?.editComment) return;
     if (S.view === 'topics' && S.topicOpen && threadBusy()) return;
     const typing = document.querySelector('.comment-form textarea, .tc-form textarea');

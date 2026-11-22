@@ -92,4 +92,9 @@ pick a date range, which weekdays need a meal, a drop-off window, food notes and
 
 ## Gift exchange
 
-Off by default — turn it on in Group Info → Features. Anyone in the group can start an exchange (name, budget, description). Members join and fill in a gift profile (favorites, sizes, likes/dislikes, stocking stuffers, wishlist). The creator (or an organizer) draws names once at least 2 people have joined; each person gets a private email with their match and that person's profile, and sees the same thing in the app. Matches are never shown to the creator unless they choose **Reveal All Matches**. The optional **Share wish lists** setting lets everyone who joined see each other's gift profiles (never the matches). Gift profiles and matches are encrypted at rest.
+Off by default — turn it on in Group Info → Features. Anyone in the group can start an exchange (name, budget, description) of one of two types:
+
+- **Adults** — members join and fill in a gift profile (favorites, sizes, likes/dislikes, stocking stuffers, wishlist) and can pick their spouse from the group. With **Spouses don't draw each other** on (the default), couples never get each other. **Share wish lists** lets everyone in the group see the gift profiles, even without joining.
+- **Kids** — parents add their children, each with their own gift profile and age. Kids' profiles are visible to everyone in the group. With **Siblings don't draw each other** on (the default), kids added by the same parent or by spouses never get each other. Each parent gets one email listing who each of their kids is buying for.
+
+The creator (or an organizer) draws names once at least 2 people or kids are in. Matches are never shown to the creator unless they choose **Reveal All Matches**. Gift profiles, kids' names and matches are encrypted at rest.
