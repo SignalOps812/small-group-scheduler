@@ -907,3 +907,7 @@ button { cursor: pointer; border: 0; background: none; padding: 0; }
 .row.stack textarea[id^="gp-"] { min-height: 64px; }
 .reveal-list { margin-bottom: 8px; }
 .reveal-list .row .v { font-weight: 600; }
+.people .person.tappable { cursor: pointer; }
+.people .person.tappable:active { background: var(--fill-2, rgba(120,120,128,.12)); }
+.people .person .chev { color: var(--label-3); margin-left: auto; display: inline-flex; }
+.sheet-head .back-btn { display: inline-flex; align-items: center; gap: 2px; }

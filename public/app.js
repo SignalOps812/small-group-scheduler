@@ -1530,7 +1530,7 @@
         </div></form>`;
     }
     if (s.kind === 'gift-form') {
-      const x = s.id ? (S.gifts || []).find((y) => y.id === s.id) : { name: '', budget: null, description: '' };
+      const x = s.id ? (S.gifts || []).find((y) => y.id === s.id) : { name: '', budget: null, description: '', shareProfiles: false };
       if (!x) return '';
       return `<form autocomplete="off" novalidate>${head(s.id ? 'Edit Exchange' : 'New Gift Exchange', 'Cancel', s.id ? 'Save' : 'Create')}
         <div class="sheet-body">
@@ -1538,6 +1538,10 @@
             <div class="row"><input name="name" placeholder="Name (e.g. Christmas Secret Santa)" maxlength="120" value="${esc(x.name)}" aria-label="Name" required></div>
             <div class="row"><label for="gx-budget">Budget</label><span class="prefix">$</span><input id="gx-budget" name="budget" inputmode="decimal" placeholder="25" value="${esc(x.budget ?? '')}"></div>
             <div class="row stack"><textarea name="description" placeholder="Description — when you’ll swap gifts, any rules or themes" maxlength="4000" aria-label="Description">${esc(x.description)}</textarea></div>
+          </div>
+          <div class="group" style="margin-top:22px">
+            <div class="row"><span>Share wish lists<small class="row-sub">Everyone in the exchange can see each other\u2019s gift profiles. Who\u2019s buying for whom stays secret.</small></span>
+              <label class="switch"><input type="checkbox" name="shareProfiles" ${x.shareProfiles ? 'checked' : ''}><span></span></label></div>
           </div>
           <p class="group-foot">${s.id ? '' : 'Everyone in the group can join and fill in their gift profile. When enough people have joined, you draw names and each person gets an email with who they’re buying for.'}</p>
           <div id="sheet-msg"></div>
@@ -1571,6 +1575,15 @@
           <div id="sheet-msg"></div>
         </div></form>`;
     }
+    if (s.kind === 'gift-person') {
+      const x = (S.gifts || []).find((y) => y.id === s.id), p = x?.participants.find((q) => q.userId === s.uid);
+      if (!p?.details) return '';
+      return `<div class="sheet-head"><button class="l back-btn" type="button" data-action="gift-back" data-id="${esc(x.id)}">${I.left.replace('<svg', '<svg width="14" height="14"')} Back</button><div class="t">Gift Profile</div><span></span></div>
+        <div class="sheet-body">
+          <div class="detail-hero">${avatar(p.userId, p.name, 'lg')}<h2 style="margin-top:12px">${esc(p.name)}</h2><div class="w">${esc(x.name)}</div></div>
+          ${giftDetailsBlock(p.details, `${p.name.split(' ')[0]} hasn\u2019t filled in their gift profile yet.`)}
+        </div>`;
+    }
     if (s.kind === 'gift') {
       const x = (S.gifts || []).find((y) => y.id === s.id);
       if (!x) return '';
@@ -1594,10 +1607,12 @@
             : !drawn ? `<div class="actions" style="margin-top:18px"><button class="btn block" data-action="gift-profile" data-id="${esc(x.id)}">Join &amp; Fill In My Profile</button></div>` : ''}
           <div class="group-label" style="margin-top:22px">${n} ${n === 1 ? 'person' : 'people'} in this exchange</div>
           <div class="group people">
-            ${n ? x.participants.map((p) => `<div class="person">${avatar(p.userId, p.name)}<div class="nm">${esc(p.name)}${p.userId === S.me.id ? ' <span class="muted">(you)</span>' : ''}<small>${p.filled ? `${p.filled} of 12 details filled in` : 'Profile not filled in yet'}</small></div>
+            ${n ? x.participants.map((p) => `<div class="person${p.details ? ' tappable' : ''}" ${p.details ? `data-action="gift-person" data-id="${esc(x.id)}" data-uid="${esc(p.userId)}" role="button" tabindex="0"` : ''}>${avatar(p.userId, p.name)}<div class="nm">${esc(p.name)}${p.userId === S.me.id ? ' <span class="muted">(you)</span>' : ''}<small>${p.filled ? `${p.filled} of 12 details filled in` : 'Profile not filled in yet'}</small></div>
+              ${p.details ? `<span class="chev">${I.right.replace('<svg', '<svg width="14" height="14"')}</span>` : ''}
               ${x.canManage && !drawn && p.userId !== S.me.id ? `<button class="link-btn danger" data-action="gift-remove" data-id="${esc(x.id)}" data-uid="${esc(p.userId)}">Remove</button>` : ''}</div>`).join('')
               : '<div class="person"><div class="nm muted">Nobody has joined yet.</div></div>'}
           </div>
+          ${x.shareProfiles ? `<p class="group-foot">${x.joined ? 'Wish lists are shared in this exchange \u2014 tap anyone to see theirs.' : 'Wish lists are shared with everyone who joins.'}</p>` : ''}
           ${x.canManage ? `<div class="group-label" style="margin-top:22px">${x.isCreator ? 'You started this exchange' : 'Organizer tools'}</div>
             <div class="actions" style="margin-top:6px">
               ${!drawn ? `<button class="btn block" data-action="gift-draw" data-id="${esc(x.id)}" ${n < 2 ? 'disabled' : ''}>Draw Names</button>
@@ -1758,7 +1773,7 @@
         setTimeout(() => location.reload(), 900);
       } else if (s.kind === 'gift-form') {
         if (!v.name.trim()) { btn.disabled = false; return err('Give the exchange a name.'); }
-        const body = { name: v.name, budget: v.budget, description: v.description };
+        const body = { name: v.name, budget: v.budget, description: v.description, shareProfiles: !!form.elements.shareProfiles?.checked };
         const r = s.id ? await api('PUT', gp(`/gifts/${s.id}`), body) : await api('POST', gp('/gifts'), body);
         upsertGift(r.exchange); S.view = 'gifts'; render();
         openSheet('gift', { id: r.exchange.id }); history.replaceState(null, '', '#gifts/' + r.exchange.id);
@@ -2231,6 +2246,8 @@
       catch (ex) { toast(ex.message); }
     },
     'gift-hide': () => { S.giftReveal = null; refreshSheet(); },
+    'gift-person': (el) => { openSheet('gift-person', { id: el.dataset.id, uid: el.dataset.uid }); },
+    'gift-back': (el) => openSheet('gift', { id: el.dataset.id }),
     'delete-gift': async (el) => {
       const x = S.gifts.find((y) => y.id === el.dataset.id);
       if (!(await ask({ title: `Delete \u201c${x.name}\u201d?`, message: 'Everyone\u2019s gift profiles and matches for this exchange will be deleted.', ok: 'Delete', destructive: true }))) return;

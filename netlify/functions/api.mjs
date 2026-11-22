@@ -1263,7 +1263,7 @@ function readGiftExchange(body) {
   const name = str(body.name, 120);
   if (!name) throw new HttpError(400, 'Give the exchange a name.');
   const budget = parseCost(body.budget);
-  return { name, budget, description: str(body.description, 4000) };
+  return { name, budget, description: str(body.description, 4000), shareProfiles: !!body.shareProfiles };
 }
 function readGiftProfile(body) {
   const out = {};
@@ -1292,8 +1292,11 @@ async function giftOut(m, x, names) {
     id: x.id, name: x.name, budget: x.budget, description: x.description, status: x.status, drawnAt: x.drawnAt || null,
     createdBy: x.createdBy, createdByName: names[x.createdBy] || 'Former member', createdAt: x.createdAt,
     isCreator: isGiftCreator(m, x), canManage: canManageGift(m, x),
-    // Everyone sees who's in; nobody sees anyone else's profile here
-    participants: parts.map((p) => ({ userId: p.userId, name: names[p.userId] || 'Former member', joinedAt: p.joinedAt, filled: giftComplete(p) })),
+    shareProfiles: !!x.shareProfiles,
+    // Everyone sees who's in. Profiles are shared only when the exchange allows it, and only with people
+    // who joined. Matches are never part of this list.
+    participants: parts.map((p) => ({ userId: p.userId, name: names[p.userId] || 'Former member', joinedAt: p.joinedAt, filled: giftComplete(p),
+      ...(x.shareProfiles && mine && p.userId !== m.user.id ? { details: giftDetails(p), updatedAt: p.updatedAt || null } : {}) })),
     joined: !!mine, myDetails: mine ? giftDetails(mine) : null, match,
   };
 }
