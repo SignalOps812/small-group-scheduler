@@ -1266,7 +1266,7 @@ function readGiftExchange(body, prev) {
   const budget = parseCost(body.budget);
   const type = prev ? (prev.type || 'adults') : (body.type === 'kids' ? 'kids' : 'adults');
   return {
-    name, budget, description: str(body.description, 4000), shareProfiles: !!body.shareProfiles, type,
+    name, budget, description: str(body.description, 4000), shareProfiles: body.shareProfiles === undefined ? (prev ? !!prev.shareProfiles : true) : !!body.shareProfiles, type,
     noSpouses: type === 'adults' && !!body.noSpouses,
     noSiblings: type === 'kids' && body.noSiblings !== false,
   };

@@ -1546,7 +1546,7 @@
         </div></form>`;
     }
     if (s.kind === 'gift-form') {
-      const x = s.id ? (S.gifts || []).find((y) => y.id === s.id) : { name: '', budget: null, description: '', shareProfiles: false, type: s.type || 'adults', noSpouses: true, noSiblings: true };
+      const x = s.id ? (S.gifts || []).find((y) => y.id === s.id) : { name: '', budget: null, description: '', shareProfiles: true, type: s.type || 'adults', noSpouses: true, noSiblings: true };
       if (!x) return '';
       const typeRow = s.id ? '' : `<div class="segmented gx-type" role="radiogroup" aria-label="Exchange type">
           <label><input type="radio" name="type" value="adults" ${x.type !== 'kids' ? 'checked' : ''}><span>Adults</span></label>
