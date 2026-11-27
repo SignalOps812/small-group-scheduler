@@ -861,6 +861,11 @@
               <button class="btn sm" style="margin-top:14px" data-action="new-gift">New Exchange</button></div>`}
       </div>`;
   }
+  // The wishlist box grows with its contents (up to most of the screen), so long lists stay readable
+  function growWishlist(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(Math.max(el.scrollHeight + 2, 200), Math.round(window.innerHeight * 0.6)) + 'px';
+  }
   function giftFieldGroups(prev, kid) {
     const fld = (k, ph, area) => area
       ? `<div class="row stack"><label class="gp-label" for="gp-${k}">${esc(giftLabel(k))}</label><textarea id="gp-${k}" name="${k}" placeholder="${esc(ph)}" maxlength="${k === 'wishlist' ? 3000 : 600}">${esc(prev[k] || '')}</textarea></div>`
@@ -1025,6 +1030,7 @@
     const html = sheetHtml();
     $sheetRoot.innerHTML = `<div class="backdrop" data-action="backdrop"><div class="sheet ${kind === 'poll' ? 'wide' : ''}" role="dialog" aria-modal="true">${html}</div></div>`;
     document.body.style.overflow = 'hidden';
+    const wl = $sheetRoot.querySelector('#gp-wishlist'); if (wl) growWishlist(wl);
     const first = $sheetRoot.querySelector('form:not(.bring-form):not(.comment-form):not(.comment-edit) input:not([type=date]):not([type=time]):not([type=checkbox])');
     if (first && matchMedia('(min-width: 761px)').matches) setTimeout(() => { if (!$sheetRoot.contains(document.activeElement) || document.activeElement === document.body) first.focus(); }, 60);
     const form = $sheetRoot.querySelector('form:not(.bring-form):not(.comment-form):not(.comment-edit)');
@@ -2563,6 +2569,7 @@
     catch (ex) { toast(ex.message); btn.disabled = false; }
   });
   document.addEventListener('input', (ev) => {
+    if (ev.target.id === 'gp-wishlist') growWishlist(ev.target);
     if (ev.target.matches?.('[data-restore-confirm]')) ev.target.closest('form').querySelector('button[type=submit]').disabled = ev.target.value.trim() !== 'RESTORE';
   });
   document.addEventListener('change', async (ev) => {
