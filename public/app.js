@@ -1696,6 +1696,7 @@
                 ? `<div class="group reveal-list">${reveal.map((r) => `<div class="row"><span>${esc(r.giverName)}</span><span class="v">→ ${esc(r.recipientName)}</span></div>`).join('')}</div>
                    <button class="btn tinted block" data-action="gift-hide" data-id="${esc(x.id)}">Hide Matches</button>`
                 : `<button class="btn tinted block" data-action="gift-reveal" data-id="${esc(x.id)}">Reveal All Matches</button>`) : ''}
+              ${drawn ? `<button class="btn tinted block" data-action="gift-resend" data-id="${esc(x.id)}">Re-send Match Emails</button>` : ''}
               ${drawn ? `<button class="btn tinted block" data-action="gift-redraw" data-id="${esc(x.id)}">Re-draw Names</button>
                 <button class="btn tinted block" data-action="gift-reopen" data-id="${esc(x.id)}">Re-open Sign-ups</button>` : ''}
               <button class="btn tinted block" data-action="edit-gift" data-id="${esc(x.id)}">Edit Exchange</button>
@@ -2329,6 +2330,12 @@
       catch (ex) { toast(ex.message); }
     },
     'gift-hide': () => { S.giftReveal = null; refreshSheet(); },
+    'gift-resend': async (el) => {
+      const x = S.gifts.find((y) => y.id === el.dataset.id);
+      if (!(await ask({ title: 'Re-send match emails?', message: `${x.type === 'kids' ? 'Each parent' : 'Everyone'} gets their match email again. The matches stay the same.`, ok: 'Re-send' }))) return;
+      try { const r = await api('POST', gp(`/gifts/${x.id}/resend`), {}); toast(`Sent ${r.sent} ${r.sent === 1 ? 'email' : 'emails'}`); }
+      catch (ex) { toast(ex.message); }
+    },
     'gift-person': (el) => { openSheet('gift-person', { id: el.dataset.id, uid: el.dataset.uid }); },
     'gift-back': (el) => openSheet('gift', { id: el.dataset.id }),
     'add-kid': (el) => openSheet('gift-kid', { id: el.dataset.id }),

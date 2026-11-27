@@ -380,6 +380,46 @@ async function logEmail(gid, subject, recipients, status, detail = '') {
   const at = now();
   try { await put(`g/${gid}/emaillog/${at}-${newId()}`, { subject, recipients, status, detail, at }); } catch {}
 }
+// POST a batch to Resend, waiting and retrying when it says we're sending too fast (429)
+async function resendBatch(key, batch) {
+  for (let attempt = 0; ; attempt++) {
+    const r = await fetch('https://api.resend.com/emails/batch', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(batch),
+    });
+    if (r.ok) return;
+    const detail = (await r.text()).slice(0, 300);
+    if ((r.status === 429 || r.status >= 500) && attempt < 4) {
+      const wait = Number(r.headers.get('retry-after')) * 1000 || 700 * 2 ** attempt;
+      await new Promise((res) => setTimeout(res, Math.min(wait, 8000)));
+      continue;
+    }
+    throw new Error(`Resend ${r.status}: ${detail}`);
+  }
+}
+// Send different messages to different people in as few requests as possible (one per 100 messages)
+async function sendEmails(messages, { gid, logAs } = {}) {
+  messages = messages.filter((x) => x && x.to);
+  if (!messages.length) return;
+  const key = RESEND_API_KEY();
+  const label = (x) => logAs || x.subject;
+  if (!key) {
+    console.log(`[email:not-configured] ${messages.length} message(s): ${messages.map((x) => `"${x.subject}"`).join(', ')}`);
+    for (const x of messages) await logEmail(gid, label(x), 1, 'skipped', 'RESEND_API_KEY is not set');
+    return;
+  }
+  for (let i = 0; i < messages.length; i += 100) {
+    const chunk = messages.slice(i, i + 100);
+    try {
+      await resendBatch(key, chunk.map((x) => ({ from: EMAIL_FROM(), to: [x.to], subject: x.subject, html: x.html, text: x.text })));
+      for (const x of chunk) await logEmail(gid, label(x), 1, 'sent');
+    } catch (err) {
+      console.error('[email] failed:', err.message);
+      for (const x of chunk) await logEmail(gid, label(x), 1, 'failed', err.message);
+    }
+  }
+}
 async function sendEmail({ to, subject, html, text, gid, logAs }) {
   const recipients = Array.isArray(to) ? to : [to];
   if (!recipients.length) return;
@@ -391,12 +431,7 @@ async function sendEmail({ to, subject, html, text, gid, logAs }) {
   try {
     for (let i = 0; i < recipients.length; i += 100) { // one message per person keeps addresses private
       const batch = recipients.slice(i, i + 100).map((addr) => ({ from: EMAIL_FROM(), to: [addr], subject, html, text }));
-      const r = await fetch('https://api.resend.com/emails/batch', {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(batch),
-      });
-      if (!r.ok) throw new Error(`Resend ${r.status}: ${(await r.text()).slice(0, 300)}`);
+      await resendBatch(key, batch);
     }
     await logEmail(gid, logAs || subject, recipients.length, 'sent');
   } catch (err) {
@@ -1388,6 +1423,29 @@ function giftKidsEmail(group, x, parentName, matches, redraw) {
     [['Age', mt.age], ...GIFT_FIELDS.map(([k, label]) => [label, mt.details[k]])].slice(1).map(([l, v]) => (v ? `${l}: ${v}` : '')).filter(Boolean).join('\n')).join('\n\n') + `\n\n${link}`;
   return { subject: one ? `[${group.name}] ${x.name}: ${matches[0].giverName} is buying for ${matches[0].name}` : `[${group.name}] ${x.name}: your kids’ matches`, html, text };
 }
+// The private match emails: one per adult, or one per parent covering all of their kids
+function giftMatchEmails(group, x, parts, pairs, users, names, redraw) {
+  const byPid = Object.fromEntries(parts.map((p) => [giftPid(p), p]));
+  const out = [];
+  if (isKids(x)) {
+    const byParent = {};
+    for (const [giver, recipient] of Object.entries(pairs)) {
+      const g = byPid[giver], r = byPid[recipient];
+      if (!g || !r) continue;
+      (byParent[g.parentId] ||= []).push({ giverName: partName(g, names), name: partName(r, names), age: r.age || '', details: giftDetails(r) });
+    }
+    for (const [pid, matches] of Object.entries(byParent)) {
+      const u = users[pid]; if (!u?.email) continue;
+      out.push({ to: u.email, ...giftKidsEmail(group, x, u.name, matches, redraw) });
+    }
+  } else {
+    for (const [giver, recipient] of Object.entries(pairs)) {
+      const u = users[giver]; if (!u?.email) continue;
+      out.push({ to: u.email, ...giftEmail(group, x, u.name, names[recipient] || 'Someone', giftDetails(byPid[recipient]), redraw) });
+    }
+  }
+  return out;
+}
 function notifyNewGift(ctx, group, x, byName, byId) {
   if (!notifyOf(group).gift) return;
   const link = deepLink(group.id, `gifts/${x.id}`);
@@ -1526,27 +1584,24 @@ route('POST', '/groups/:gid/gifts/:id/draw', async ({ req, params, ctx }) => {
   const next = { ...x, status: 'drawn', drawnAt: now(), drawCount: (x.drawCount || 0) + 1 };
   await put(gxKey(m.group.id, x.id), next);
   const names = await nameMap(m.group.id);
-  const logAs = `[${m.group.name}] ${x.name}: gift exchange match`;
-  if (kids) { // one private email per parent, covering all of their kids
-    const byParent = {};
-    for (const [giver, recipient] of Object.entries(pairs)) {
-      const g = byPid[giver], r = byPid[recipient];
-      (byParent[g.parentId] ||= []).push({ giverName: partName(g, names), name: partName(r, names), age: r.age || '', details: giftDetails(r) });
-    }
-    for (const [pid, matches] of Object.entries(byParent)) {
-      const u = users[pid]; if (!u) continue;
-      const e = giftKidsEmail(m.group, next, u.name, matches, redraw);
-      ctx.background(sendEmail({ to: u.email, subject: e.subject, html: e.html, text: e.text, gid: m.group.id, logAs }));
-    }
-  } else {
-    for (const [giver, recipient] of Object.entries(pairs)) { // one private email per person
-      const u = users[giver]; if (!u) continue;
-      const e = giftEmail(m.group, next, u.name, names[recipient] || 'Someone', giftDetails(byPid[recipient]), redraw);
-      ctx.background(sendEmail({ to: u.email, subject: e.subject, html: e.html, text: e.text, gid: m.group.id, logAs }));
-    }
-  }
+  ctx.background(sendEmails(giftMatchEmails(m.group, next, parts, pairs, users, names, redraw), { gid: m.group.id, logAs: `[${m.group.name}] ${x.name}: gift exchange match` }));
   console.log(`[gifts] ${redraw ? 're-drew' : 'drew'} ${parts.length} names for ${x.id}`);
   return { exchange: await giftOut(m, next, names) };
+});
+// Re-send everyone's match email without drawing again (e.g. if emails didn't arrive)
+route('POST', '/groups/:gid/gifts/:id/resend', async ({ req, params, ctx }) => {
+  const m = await requireMember(req, params.gid); requireFeature(m, 'gifts');
+  const x = await getGift(m, params.id);
+  if (!canManageGift(m, x)) throw new HttpError(403, 'Only the person who started this exchange can re-send the emails.');
+  if (x.status !== 'drawn') throw new HttpError(400, 'Names haven’t been drawn yet.');
+  const parts = await giftParts(m.group.id, x.id);
+  const pairs = Object.fromEntries((await listAll(gxMatchPrefix(m.group.id, x.id))).map((a) => [a.giver, a.recipient]));
+  const userIds = [...new Set(parts.map((p) => (isKids(x) ? p.parentId : p.userId)))];
+  const users = Object.fromEntries((await Promise.all(userIds.map((id) => get(`users/${id}`)))).filter(Boolean).map((u) => [u.id, u]));
+  const msgs = giftMatchEmails(m.group, x, parts, pairs, users, await nameMap(m.group.id), false);
+  ctx.background(sendEmails(msgs, { gid: m.group.id, logAs: `[${m.group.name}] ${x.name}: gift exchange match (re-sent)` }));
+  console.log(`[gifts] re-sent ${msgs.length} match emails for ${x.id}`);
+  return { sent: msgs.length };
 });
 // Re-open sign-ups (clears the drawing so names can be drawn again with a different group of people)
 route('POST', '/groups/:gid/gifts/:id/reopen', async ({ req, params }) => {
